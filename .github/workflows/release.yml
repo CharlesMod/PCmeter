@@ -1,0 +1,51 @@
+# Builds the Linux binary and publishes a GitHub release whenever main carries a version
+# (backend/pcmeter.py __version__) that has not been released yet.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # The oldest supported runner, so the binary runs on any distro with glibc 2.35 or newer.
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: v
+        run: echo "version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' backend/pcmeter.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already released
+        id: check
+        run: |
+          if gh release view "v${{ steps.v.outputs.version }}" >/dev/null 2>&1; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "v${{ steps.v.outputs.version }} is already released; nothing to do."
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.released != 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        if: steps.check.outputs.released != 'true'
+        run: |
+          pip install -r requirements.txt pyinstaller
+          packaging/build.sh
+          dist/pcmeter --version
+
+      - name: Publish release
+        if: steps.check.outputs.released != 'true'
+        run: |
+          v="${{ steps.v.outputs.version }}"
+          gh release create "v$v" "dist/PCmeter-$v-linux-x86_64.tar.gz" \
+            --title "PCmeter $v" --notes-file packaging/release-notes.md --target "$GITHUB_SHA"
