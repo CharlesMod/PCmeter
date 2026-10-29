@@ -41,7 +41,7 @@ jobs:
         run: |
           pip install -r requirements.txt pyinstaller
           packaging/build.sh
-          dist/pcmeter --version
+          dist/pcmeter/pcmeter --version
 
       - name: Publish release
         if: steps.check.outputs.released != 'true'

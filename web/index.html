@@ -345,6 +345,11 @@ body.widget { background: transparent; }
 .clip.over > .run { animation: drift var(--dur, 8s) ease-in-out infinite alternate; }
 @keyframes drift { 0%, 18% { transform: translateX(0); } 82%, 100% { transform: translateX(var(--shift, 0)); } }
 @media (prefers-reduced-motion: reduce) { .clip.over > .run { animation: none; } }
+.nodrift .clip.over > .run { animation: none; }
+.lite .clip.over > .run { animation: none; }
+.lite .meter i { transition: none; }
+.lite .gbtn { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(var(--fg), .10); }
+.lite .snd-pop, .lite body.gadget .gctl, .lite body.gadget .led-wrap { transition: none; }
 
 .head { display: flex; align-items: flex-start; gap: 12px; }
 .head .id { min-width: 0; flex: 1; }
@@ -491,6 +496,133 @@ body.widget { background: transparent; }
 @media (prefers-reduced-motion: reduce) {
   .meter i { transition: none; }
 }
+
+
+/* ---- desktop gadgets (?gadget=cpu|gpu). The shell (backend/desktop.py) shows each card in its
+   own frameless, translucent window that is exactly the card: no outer window. Behind the card's
+   own surface sits the skin's wallpaper at --pane opacity, and behind that the compositor's blur.
+   Drag the card anywhere to move it; the edges resize its width; the buttons dismiss it or open
+   the menu. */
+[data-skin="glass"]   { --pane: .80; }
+[data-skin="matrix"]  { --pane: .90; }
+[data-skin="hive"]    { --pane: .88; }
+[data-skin="windows"] { --pane: .78; }
+[data-skin="mac"]     { --pane: .76; }
+[data-skin="linux"]   { --pane: .88; }
+[data-skin="dark"]    { --pane: .92; }
+[data-skin="white"]   { --pane: .92; }
+html.gadget, body.gadget { background: transparent; margin: 0; overflow: hidden; }
+body.gadget { min-height: 0; -webkit-user-select: none; user-select: none; }
+body.gadget .deck { max-width: none; margin: 0; padding: 0; gap: 0; }
+body.gadget .bar { display: none; }
+body.gadget .cards { display: block; }
+body.gadget .card.off { display: none; }
+body.gadget .card {
+  isolation: isolate; cursor: default;
+  background: transparent;
+  -webkit-backdrop-filter: none; backdrop-filter: none;   /* nothing behind it in the page; the compositor blurs */
+}
+.card > .pane { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.card > .pane::before, .card > .pane::after { content: ""; position: absolute; inset: 0; }
+.card > .pane::before { background: var(--wallpaper); opacity: var(--pane, .85); }
+.card > .pane::after { background: var(--card-bg); }
+
+.gctl { display: none; }
+body.gadget .gctl {
+  display: flex; align-items: center; gap: 4px;
+  position: absolute; top: 10px; right: 10px; z-index: 5;
+  opacity: 0; transition: opacity .16s ease;
+}
+body.gadget .card:hover .gctl, body.gadget .gctl:focus-within { opacity: 1; }
+body.gadget .led-wrap { transition: opacity .16s ease; }
+body.gadget .card:hover .led-wrap { opacity: 0; }
+.gbtn {
+  display: grid; place-items: center; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 8px; color: var(--ink-2); cursor: default;
+  background: rgba(var(--fg), .06);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.gbtn svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.gbtn.menu svg { fill: currentColor; stroke: none; }
+.gbtn:hover { background: rgba(var(--fg), .14); color: var(--ink); }
+.gbtn:active { background: rgba(var(--fg), .2); }
+.gbtn.close:hover { background: var(--hot); color: #fff; }
+.gbtn:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+
+[data-skin="windows"] .gbtn { width: 30px; height: 24px; border-radius: 4px; background: transparent; }
+[data-skin="windows"] .gbtn:hover { background: rgba(var(--fg), .09); }
+[data-skin="windows"] .gbtn.close:hover { background: #c42b1c; }
+
+[data-skin="mac"] body.gadget .gctl { gap: 7px; top: 12px; right: 12px; }
+[data-skin="mac"] .gbtn { width: 12px; height: 12px; border-radius: 50%; color: rgba(0, 0, 0, .55);
+  box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .2); -webkit-backdrop-filter: none; backdrop-filter: none; }
+[data-skin="mac"] .gbtn svg { width: 6px; height: 6px; stroke-width: 1.8; opacity: 0; }
+[data-skin="mac"] .gctl:hover .gbtn svg { opacity: 1; }
+[data-skin="mac"] .gbtn.close { order: -1; background: #ff5f57; }
+[data-skin="mac"] .gbtn.menu { background: #c7c7cc; }
+[data-skin="mac"] .gbtn:hover, [data-skin="mac"] .gbtn.close:hover { color: rgba(0, 0, 0, .6); filter: brightness(1.06); }
+[data-skin="mac"] .gbtn.close:hover { background: #ff5f57; }
+
+[data-skin="linux"] body.gadget .gctl { gap: 6px; }
+[data-skin="linux"] .gbtn { width: 20px; height: 20px; border-radius: 50%; background: rgba(var(--fg), .12); color: var(--ink); }
+[data-skin="linux"] .gbtn:hover { background: rgba(var(--fg), .22); }
+[data-skin="linux"] .gbtn.close { background: #e95420; color: #fff; }
+[data-skin="linux"] .gbtn.close:hover { background: #f0733e; }
+
+[data-skin="matrix"] .gbtn { width: 22px; height: 20px; border-radius: 2px; background: rgba(0, 20, 6, .8);
+  box-shadow: inset 0 0 0 1px var(--edge); -webkit-backdrop-filter: none; backdrop-filter: none; }
+[data-skin="matrix"] .gbtn:hover { background: rgba(var(--fg), .14); box-shadow: inset 0 0 0 1px var(--ink); }
+[data-skin="matrix"] .gbtn.close:hover { background: var(--hot); color: #000; box-shadow: none; }
+
+[data-skin="hive"] .gbtn { border-radius: 6px; }
+[data-skin="hive"] .gbtn:hover { box-shadow: inset 0 0 0 1px var(--edge); }
+
+[data-skin="white"] .gbtn, [data-skin="dark"] .gbtn { -webkit-backdrop-filter: none; backdrop-filter: none; }
+
+/* width handles along the left and right edges; the height always follows the content */
+.rs { position: fixed; top: 14px; bottom: 14px; width: 6px; z-index: 30; cursor: ew-resize; }
+.rs.w { left: 0; }
+.rs.e { right: 0; }
+
+/* ---- per-card click sound: a speaker in the activity strip, a volume slider on hover */
+.geiger { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.snd { position: relative; display: grid; }
+.snd-btn {
+  display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--hair); background: rgba(var(--fg), .04); color: var(--ink-3); cursor: pointer;
+}
+.snd-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.snd-btn .waves { display: none; }
+.snd-btn[aria-pressed="true"] { color: var(--acc); border-color: color-mix(in srgb, var(--acc) 45%, transparent); }
+.snd-btn[aria-pressed="true"] .waves { display: inline; }
+.snd-btn[aria-pressed="true"] .x { display: none; }
+.snd-btn:hover { color: var(--ink); background: rgba(var(--fg), .1); }
+.snd-btn:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+.snd.master-off .snd-btn { opacity: .5; }
+.snd-pop {
+  position: absolute; right: -6px; bottom: 100%; padding-bottom: 6px; z-index: 6;
+  opacity: 0; pointer-events: none; transform: translateY(3px);
+  transition: opacity .14s ease, transform .14s ease;
+}
+.snd:hover .snd-pop, .snd:focus-within .snd-pop { opacity: 1; pointer-events: auto; transform: none; }
+.snd-box {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  border-radius: min(12px, calc(var(--radius) * .6)); border: 1px solid var(--edge);
+  background: var(--disc); box-shadow: 0 8px 22px -10px rgba(0, 0, 0, .55);
+}
+.snd-box input { width: 112px; accent-color: var(--acc); margin: 0; cursor: pointer; }
+.snd-box output { font: 400 11px var(--f-num); color: var(--ink-2); min-width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .snd-pop { transition: none; } }
+
+/* ---- gauges view: each card condenses to its name and dial */
+.gauge .card { gap: 8px; padding: 12px 14px 14px; }
+.gauge .card .geiger, .gauge .card .readouts, .gauge .card .sub, .gauge .card .detail,
+.gauge .card .head-spark { display: none; }
+.gauge .head .id { flex: 1; max-width: none; }
+.gauge .head h2 { font-size: 13px; }
+.gauge .instrument { grid-template-columns: 1fr; justify-items: center; }
+.gauge .cards { grid-template-columns: repeat(auto-fit, 208px); justify-content: center; }
+body.gauge .rs { display: none; }
 </style>
 
 <main class="deck" id="deck">
@@ -515,10 +647,14 @@ body.widget { background: transparent; }
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z"/><path id="wave" d="M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4" opacity=".35"/></svg>
         <span id="sound-text">Clicks off</span>
       </button>
-      <button class="btn" id="compact" type="button" aria-pressed="false" title="Show only the dials and activity counters">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 5.5h10M3 10.5h10"/></svg>
-        Compact
-      </button>
+      <label class="btn skin-pick" title="Full detail, compact (dials and activity), or the gauges alone">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h6"/></svg>
+        <select id="view" aria-label="View">
+          <option value="full">Full</option>
+          <option value="compact">Compact</option>
+          <option value="gauge">Gauges</option>
+        </select>
+      </label>
     </div>
   </header>
 
@@ -553,6 +689,10 @@ body.widget { background: transparent; }
         <span class="lbl">Activity</span>
         <canvas id="cpu-geiger"></canvas>
         <div class="cpm"><b id="cpu-cpm">0</b><span>CPM</span></div>
+        <div class="snd" id="cpu-snd">
+          <button class="snd-btn" type="button" aria-pressed="false" aria-label="CPU clicks" title="Unmute CPU clicks"><svg viewBox="0 0 16 16" aria-hidden="true"><path class="cone" d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z"/><path class="waves" d="M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4"/><path class="x" d="M10.5 6l4 4M14.5 6l-4 4"/></svg></button>
+          <div class="snd-pop"><div class="snd-box"><input type="range" min="0" max="100" step="1" value="60" aria-label="CPU click volume"><output>60%</output></div></div>
+        </div>
       </div>
 
       <div class="sect detail">
@@ -601,12 +741,16 @@ body.widget { background: transparent; }
           <span class="lbl">Activity</span>
           <canvas id="gpu-geiger"></canvas>
           <div class="cpm"><b id="gpu-cpm">0</b><span>CPM</span></div>
+        <div class="snd" id="gpu-snd">
+          <button class="snd-btn" type="button" aria-pressed="false" aria-label="GPU clicks" title="Unmute GPU clicks"><svg viewBox="0 0 16 16" aria-hidden="true"><path class="cone" d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z"/><path class="waves" d="M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4"/><path class="x" d="M10.5 6l4 4M14.5 6l-4 4"/></svg></button>
+          <div class="snd-pop"><div class="snd-box"><input type="range" min="0" max="100" step="1" value="60" aria-label="GPU click volume"><output>60%</output></div></div>
+        </div>
         </div>
 
         <div class="sect detail">
           <div class="bw-top">
-            <h3 class="eyebrow" style="margin:0;color:var(--ink-2)">VRAM throughput</h3>
-            <div class="bw-val"><span id="gpu-bw">—</span><small>GB/s</small></div>
+            <h3 class="eyebrow" style="margin:0;color:var(--ink-2)" title="Estimated: memory-controller busy time x bandwidth at the current memory clock">VRAM throughput</h3>
+            <div class="bw-val"><span id="gpu-bw">—</span><small id="gpu-bw-unit"></small></div>
           </div>
           <div class="meter"><i id="gpu-bw-bar"></i></div>
           <canvas class="spark" id="gpu-bw-spark" style="height:30px"></canvas>
@@ -634,6 +778,14 @@ body.widget { background: transparent; }
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 if (params.has('widget')) document.body.classList.add('widget');
+if (params.has('nodrift')) document.documentElement.classList.add('nodrift');
+/* ?lite: drawn on the CPU (the desktop gadgets). Everything that moves then moves only inside the
+   capped frame loop below (no CSS animations or transitions ticking at the display's rate), and
+   glows are cheap halo strokes instead of canvas shadow blur, which is costly in software. */
+const LITE = params.has('lite');
+if (LITE) document.documentElement.classList.add('lite');
+/* In a desktop gadget window the page shows one card: ?gadget=cpu or ?gadget=gpu. */
+const GADGET = ['cpu', 'gpu'].includes(params.get('gadget')) ? params.get('gadget') : null;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 
@@ -693,15 +845,23 @@ class Spring {
   }
 }
 
-function pointer(ctx, cx, cy, a, r0, r1, w, glow) {
+/* The cheap glow: the current path stroked wide and faint under the real thing. */
+function halo(ctx, color, width) {
+  if (T.glow < .05) return;
+  ctx.save(); ctx.globalAlpha *= .28 * Math.min(1, T.glow); ctx.strokeStyle = color; ctx.lineWidth = width;
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke(); ctx.restore();
+}
+function pointer(ctx, cx, cy, a, r0, r1, w, glow, bare = false) {   // bare: no glow (inner exposures of a smear)
   const ux = Math.cos(a), uy = Math.sin(a), px = -uy * w, py = ux * w;
   ctx.save();
-  ctx.shadowColor = glow; ctx.shadowBlur = 10 * T.glow;
+  if (!LITE && !bare) { ctx.shadowColor = glow; ctx.shadowBlur = 10 * T.glow; }
   ctx.beginPath();
   ctx.moveTo(cx + ux * r0 + px, cy + uy * r0 + py);
   ctx.lineTo(cx + ux * r1, cy + uy * r1);
   ctx.lineTo(cx + ux * r0 - px, cy + uy * r0 - py);
-  ctx.closePath(); ctx.fillStyle = T.needle; ctx.fill();
+  ctx.closePath();
+  if (LITE && !bare) halo(ctx, glow, 1 + 3 * T.glow);
+  ctx.fillStyle = T.needle; ctx.fill();
   ctx.restore();
 }
 
@@ -763,7 +923,19 @@ function dialLayer(canvas, s, zones) {
 }
 
 /* Dual dial: load on the main face, temperature on the inset sub-dial in the bottom gap. */
-function drawDial(canvas, load, tNorm, tempC, acc, zones) {
+/* A needle smeared from angle aFrom to aTo: a few exposures, each fainter, so the sweep averages
+   out like a film frame. A still needle (one exposure) stays crisp. */
+function sweptPointer(ctx, cx, cy, aFrom, aTo, r0, r1, w, glow) {
+  // Exposures under a pixel apart at the tip, so the smear is continuous rather than ghosted.
+  // Each is faint enough that where they all overlap (near the hub) they sum to a solid needle.
+  const n = Math.max(1, Math.min(18, Math.ceil(Math.abs(aTo - aFrom) * r1 / .8)));
+  if (n === 1) return pointer(ctx, cx, cy, aTo, r0, r1, w, glow);
+  ctx.save();
+  ctx.globalAlpha = 1 - Math.pow(.06, 1 / n);
+  for (let i = 0; i < n; i++) pointer(ctx, cx, cy, aFrom + (aTo - aFrom) * i / (n - 1), r0, r1, w, glow, i < n - 1);
+  ctx.restore();
+}
+function drawDial(canvas, load, tNorm, tempC, acc, zones, loadFrom = load, tFrom = tNorm) {
   const s = fit(canvas);
   if (!s) return;
   const { ctx, w, h } = s, g = dialGeometry(w, h);
@@ -784,11 +956,14 @@ function drawDial(canvas, load, tNorm, tempC, acc, zones) {
       stroke = ctx.createConicGradient(A0, g.cx, g.cy);
       stroke.addColorStop(0, acc(.25)); stroke.addColorStop(.75, acc(1)); stroke.addColorStop(1, acc(1));
     }
-    ctx.save(); ctx.shadowColor = acc(.7); ctx.shadowBlur = 12 * T.glow;
-    ctx.lineCap = 'round'; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(g.cx, g.cy, g.ra, A0, angle(load)); ctx.strokeStyle = stroke; ctx.stroke(); ctx.restore();
+    ctx.save();
+    if (!LITE) { ctx.shadowColor = acc(.7); ctx.shadowBlur = 12 * T.glow; }
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(g.cx, g.cy, g.ra, A0, angle(load));
+    if (LITE) halo(ctx, acc(.8), 4 + 6 * T.glow);
+    ctx.lineWidth = 4; ctx.strokeStyle = stroke; ctx.stroke(); ctx.restore();
   }
-  pointer(ctx, g.cx, g.cy, angle(load), g.ra - 9, g.R - 2, 2.2, acc(.9));
+  sweptPointer(ctx, g.cx, g.cy, angle(loadFrom), angle(load), g.ra - 9, g.R - 2, 2.2, acc(.9));
 
   // readout
   const pct = String(Math.round(clamp(load) * 100));
@@ -803,7 +978,7 @@ function drawDial(canvas, load, tNorm, tempC, acc, zones) {
   // temperature needle and reading
   if (tempC != null) {
     const zone = tempC >= zones[1] ? C.hot : tempC >= zones[0] ? C.warn : C.cool;
-    pointer(ctx, g.sx, g.sy, angle(tNorm), g.sr * .5, g.sr - 1, 1.4, zone(.9));
+    sweptPointer(ctx, g.sx, g.sy, angle(tFrom), angle(tNorm), g.sr * .5, g.sr - 1, 1.4, zone(.9));
   }
   ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.font = `400 ${Math.round(g.sr * .42)}px ${T.num}`;
@@ -843,13 +1018,30 @@ function drawSpark(canvas, spec, f) {
   ctx.fillStyle = g; ctx.fill(area);
   ctx.strokeStyle = acc(.95); ctx.lineWidth = 1.25; ctx.lineJoin = 'round'; ctx.stroke(line);
   const [ex, ey] = pts[pts.length - 1];
-  ctx.save(); ctx.shadowColor = acc(1); ctx.shadowBlur = 8 * T.glow;
+  ctx.save();
+  if (LITE) { ctx.beginPath(); ctx.arc(ex, ey, 2.4 + 3 * T.glow, 0, Math.PI * 2); ctx.globalAlpha = .25; ctx.fillStyle = acc(1); ctx.fill(); ctx.globalAlpha = 1; }
+  else { ctx.shadowColor = acc(1); ctx.shadowBlur = 8 * T.glow; }
   ctx.beginPath(); ctx.arc(ex, ey, 2.4, 0, Math.PI * 2); ctx.fillStyle = T.needle; ctx.fill(); ctx.restore();
 }
 
-/* ---------- clicks: a short decaying noise burst, CPU panned left and GPU right */
+/* ---------- clicks: a short decaying noise burst, CPU panned left and GPU right.
+   The master switch is the toolbar's Clicks button (in a gadget, the menu); each card has its own
+   mute and volume, kept per browser profile. Cards start muted. */
+const snd = {};
+for (const key of ['cpu', 'gpu']) {
+  snd[key] = { muted: true, vol: .6 };
+  try { Object.assign(snd[key], JSON.parse(localStorage.getItem(`pcmeter.snd.${key}`)) || {}); } catch {}
+}
 const audio = {
   ctx: null, on: false,
+  /* The context exists, and runs, only while some card on this page is unmuted with the master on;
+     otherwise it is suspended so the audio stream (and its thread) stops. */
+  sync() {
+    const audible = this.on && ['cpu', 'gpu'].some(k => (!GADGET || GADGET === k) && !snd[k].muted && snd[k].vol > 0);
+    if (audible) return this.enable();
+    if (this.ctx && this.ctx.state === 'running') this.ctx.suspend();
+    return true;
+  },
   enable() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return false;
@@ -860,16 +1052,23 @@ const audio = {
       const d = this.buf.getChannelData(0);
       for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (len * .16));
       this.master = this.ctx.createGain(); this.master.gain.value = .4; this.master.connect(this.ctx.destination);
+      this.chan = {};
+      for (const key of ['cpu', 'gpu']) { this.chan[key] = this.ctx.createGain(); this.chan[key].connect(this.master); }
+      for (const key of ['cpu', 'gpu']) this.level(key);
     }
-    this.ctx.resume(); this.on = true; return true;
+    if (this.ctx.state !== 'running') this.ctx.resume();
+    return true;
   },
-  click(pan, amp, tone, delay) {
-    if (!this.on) return;
+  level(key) {   // a card's own gain: muted, or its volume on a perceptual (squared) curve
+    if (this.chan) this.chan[key].gain.value = snd[key].muted ? 0 : snd[key].vol * snd[key].vol;
+  },
+  click(key, pan, amp, tone, delay) {
+    if (!this.on || !this.ctx || this.ctx.state !== 'running' || snd[key].muted || !snd[key].vol) return;
     const a = this.ctx, src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
     src.buffer = this.buf; f.type = 'highpass'; f.frequency.value = tone; g.gain.value = .2 + .8 * amp;
     src.connect(f).connect(g);
-    if (a.createStereoPanner) { const p = a.createStereoPanner(); p.pan.value = pan; g.connect(p).connect(this.master); }
-    else g.connect(this.master);
+    if (a.createStereoPanner) { const p = a.createStereoPanner(); p.pan.value = pan; g.connect(p).connect(this.chan[key]); }
+    else g.connect(this.chan[key]);
     src.start(a.currentTime + delay);
   }
 };
@@ -899,7 +1098,7 @@ class Geiger {
       const amp = clamp(0.25 + u * 0.55 + (Math.random() - 0.5) * 0.5, 0.15, 1);
       this.ev.push(now - off, amp);
       this.lit = Math.min(1, this.lit + 0.45 + amp * 0.5);
-      audio.click(this.pan, amp, this.tone, off);
+      if (!GADGET || GADGET === this.key) audio.click(this.key, this.pan, amp, this.tone, off);   // a gadget plays only its own card
     }
     this.lit *= Math.exp(-dt * 20);
     const o = this.lit < .01 ? 0 : Math.round(this.lit * 50) / 50;
@@ -908,10 +1107,11 @@ class Geiger {
     if (this.head > 2048) { this.ev = this.ev.slice(this.head); this.head = 0; }
     if (now - this.lastCpm > 0.5) { this.lastCpm = now; put(`${this.key}-cpm`, ((this.ev.length - this.head) / 2 * 6).toLocaleString()); }
   }
-  draw(now) {
+  draw(now, shut = 0) {
     const s = sizes.get(this.canvas);
     if (!s || s.w < 2) return;
     const { w, h } = s, mid = h / 2, speed = w / 6, acc = ACC[this.key];
+    const smear = speed * shut, lw = 1.4 + smear, fade = 1.4 / lw;   // same ink, spread over the smear
     const buckets = Array.from({ length: ALPHA_STEPS }, () => null), fresh = new Path2D();
     let any = false, anyFresh = false;
     for (let i = this.head; i < this.ev.length; i += 2) {
@@ -934,31 +1134,43 @@ class Geiger {
     const { ctx } = fit(this.canvas);
     ctx.strokeStyle = fg(.07); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, mid + .5); ctx.lineTo(w, mid + .5); ctx.stroke();
-    ctx.lineWidth = 1.4;
-    buckets.forEach((p, b) => { if (p) { ctx.strokeStyle = acc((b + .5) / ALPHA_STEPS); ctx.stroke(p); } });
-    if (anyFresh) { ctx.save(); ctx.shadowColor = acc(1); ctx.shadowBlur = 9 * T.glow; ctx.strokeStyle = T.needle; ctx.stroke(fresh); ctx.restore(); }
+    ctx.lineWidth = lw;
+    buckets.forEach((p, b) => { if (p) { ctx.strokeStyle = acc((b + .5) / ALPHA_STEPS * fade); ctx.stroke(p); } });
+    if (anyFresh) {
+      ctx.save();
+      if (LITE) { ctx.globalAlpha = .3; ctx.strokeStyle = acc(1); ctx.lineWidth = lw + 3 * T.glow; ctx.stroke(fresh); ctx.globalAlpha = 1; ctx.lineWidth = lw; }
+      else { ctx.shadowColor = acc(1); ctx.shadowBlur = 9 * T.glow; }
+      ctx.strokeStyle = T.needle; ctx.stroke(fresh); ctx.restore();
+    }
   }
 }
 
 /* Per-thread bars with peak-hold markers, like an audio level meter. Redraws only while moving. */
+/* Each bar glides from the last sample to the new one over the whole sample interval (ease-in-out),
+   so it is always in motion between samples instead of snapping and waiting, which read as a pulse. */
 class Cores {
-  constructor(canvas) { this.c = canvas; this.t = []; this.v = []; this.pk = []; this.hold = []; this.moving = true; }
-  set(arr) {
+  constructor(canvas) { this.c = canvas; this.t = []; this.v = []; this.from = []; this.pk = []; this.hold = []; this.at = 0; this.moving = true; }
+  set(arr, now = performance.now()) {
     this.t = arr.map(x => x / 100);
     while (this.v.length < this.t.length) { this.v.push(0); this.pk.push(0); this.hold.push(0); }
     this.v.length = this.pk.length = this.hold.length = this.t.length;
+    this.from = this.v.slice();
+    this.at = now;
     this.moving = true;
   }
-  step(dt) {
+  step(dt, now) {
     if (!this.moving) return;
-    const k = reduceMotion ? 1 : 1 - Math.exp(-dt * 9);
-    let moving = false;
+    const p = reduceMotion ? 1 : clamp((now - this.at) / sampleMs);
+    const e = p * p * (3 - 2 * p);
+    let moving = p < 1;
+    this.open = this.open || [];
     for (let i = 0; i < this.t.length; i++) {
-      const dv = this.t[i] - this.v[i];
-      this.v[i] = Math.abs(dv) < 5e-4 ? this.t[i] : this.v[i] + dv * k;
+      const from = this.from[i] ?? this.v[i], before = this.v[i];
+      this.v[i] = from + (this.t[i] - from) * e;
+      this.open[i] = reduceMotion ? this.v[i] : (before + this.v[i]) / 2;
       if (this.v[i] >= this.pk[i]) { this.pk[i] = this.v[i]; this.hold[i] = 1.2; }
       else if ((this.hold[i] -= dt) < 0) this.pk[i] = Math.max(this.v[i], this.pk[i] - dt * .3);
-      if (this.v[i] !== this.t[i] || this.pk[i] > this.v[i]) moving = true;
+      if (this.pk[i] > this.v[i] || this.open[i] !== this.v[i]) moving = true;   // one more frame to settle crisp
     }
     this.moving = moving;
     this.dirty = true;
@@ -978,8 +1190,13 @@ class Cores {
     ctx.fillStyle = grad;
     for (let i = 0; i < n; i++) {
       const v = clamp(this.v[i]), bh = Math.max(1.5, v * H);
-      ctx.globalAlpha = .35 + .65 * v;
-      ctx.beginPath(); rrect(ctx, i * (bw + gap), H - bh, bw, bh, r); ctx.fill();
+      const o = clamp(this.open && this.open[i] != null ? this.open[i] : v), oh = Math.max(1.5, o * H);
+      ctx.globalAlpha = .35 + .65 * Math.min(v, o);
+      ctx.beginPath(); rrect(ctx, i * (bw + gap), H - Math.min(bh, oh), bw, Math.min(bh, oh), r); ctx.fill();
+      if (Math.abs(oh - bh) > .5) {              // the stretch the top crossed: half exposed
+        ctx.globalAlpha = (.35 + .65 * Math.max(v, o)) * .5;
+        ctx.fillRect(i * (bw + gap), H - Math.max(bh, oh), bw, Math.abs(oh - bh));
+      }
     }
     ctx.globalAlpha = 1;
     ctx.beginPath();
@@ -1006,6 +1223,15 @@ addSpark('gpu-hspark', S.gpu.hist, () => 100, 'gpu');
 addSpark('gpu-bw-spark', S.gpu.bwHist, () => S.gpu.bwMax || 100, 'gpu');
 
 const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '—' : Number(v).toFixed(d);
+/* A byte rate (given in GB/s) in the unit that reads best: MB/s below 1 GB/s, GB/s from there up. */
+function rate(gbps) {
+  if (gbps == null || Number.isNaN(gbps)) return { v: '—', u: '' };
+  if (gbps < 1) { const mb = gbps * 1000; return { v: mb < 10 ? mb.toFixed(1) : String(Math.round(mb)), u: 'MB/s' }; }
+  return { v: gbps < 10 ? gbps.toFixed(2) : gbps < 100 ? gbps.toFixed(1) : String(Math.round(gbps)), u: 'GB/s' };
+}
+const rateText = gbps => { const r = rate(gbps); return `${r.v} ${r.u}`; };
+/* 1, 2 or 5 times a power of ten, at or above v */
+function niceCeil(v) { const e = Math.pow(10, Math.floor(Math.log10(v))); return [1, 2, 5, 10].map(m => m * e).find(x => x >= v - 1e-12); }
 const unit = (v, u, d = 0) => v == null ? '—' : `${fmt(v, d)}<small>${u}</small>`;
 const push = (arr, v) => { arr.push(v); if (arr.length > 120) arr.shift(); };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1032,14 +1258,42 @@ function fitClips() {
       el.style.setProperty('--shift', `${-(over + 12)}px`);
       el.style.setProperty('--dur', `${(2.5 + (over + 12) / 22).toFixed(1)}s`);
       el.classList.add('over');
-    } else el.classList.remove('over');
+      if (LITE) { el._drift = { shift: -(over + 12), dur: 2.5 + (over + 12) / 22, x: null }; drifting.add(el); }
+    } else {
+      el.classList.remove('over');
+      if (drifting.delete(el)) { el.firstElementChild.style.transform = ''; el._drift = null; }
+    }
   }
 }
 /* Meters scale instead of changing width, so their animation never triggers layout. */
 function putWidth(id, frac) {
+  if (LITE) { const b = bars.get(id) || { x: 0, t: 0, shown: -1 }; b.t = clamp(frac); bars.set(id, b); return; }
   const v = `scaleX(${Math.round(clamp(frac) * 1000) / 1000})`;
   if (written.get(id) === v) return;
   written.set(id, v); $(id).style.transform = v;
+}
+/* LITE: meters ease toward their targets in the frame loop instead of a CSS transition. */
+const bars = new Map();
+function stepBars(dt) {
+  const k = reduceMotion ? 1 : 1 - Math.exp(-dt * 9);
+  for (const [id, b] of bars) {
+    b.x = Math.abs(b.t - b.x) < .002 ? b.t : b.x + (b.t - b.x) * k;
+    const q = Math.round(b.x * 500) / 500;
+    if (q !== b.shown) { b.shown = q; $(id).style.transform = `scaleX(${q})`; }
+  }
+}
+/* LITE: overflowing text drifts in the frame loop, with the same timing as the CSS keyframes:
+   hold 18%, ease across, hold 18%, and back. Written only when it moves by half a pixel. */
+const drifting = new Set();
+function stepDrift(now) {
+  for (const el of drifting) {
+    const d = el._drift;
+    if (!d) continue;
+    const ph = (now % (2 * d.dur)) / d.dur, p = ph > 1 ? 2 - ph : ph;
+    const u = clamp((p - .18) / .64), e = u * u * (3 - 2 * u);
+    const x = Math.round(d.shift * e * 2) / 2;
+    if (x !== d.x) { d.x = x; el.firstElementChild.style.transform = `translateX(${x}px)`; }
+  }
 }
 
 /* New data: update targets and history now; the DOM only while the page is visible. */
@@ -1063,7 +1317,12 @@ function ingest(d) {
     push(S.gpu.hist, g.util ?? 0);
     if (g.bw_gbps != null) S.gpu.bwPeak = g.bw_peak_gbps || Math.max(S.gpu.bwPeak, g.bw_gbps);
     push(S.gpu.bwHist, g.bw_gbps ?? g.mem_util ?? 0);
-    S.gpu.bwMax = g.bw_gbps != null ? S.gpu.bwPeak : 100;
+    if (g.bw_gbps != null) {
+      // The graph scales to recent traffic, not the card's peak (960 GB/s on an RTX 5080 would
+      // flatten everyday traffic into a line). It grows at once and shrinks slowly.
+      const target = niceCeil(Math.max(.05, Math.max(...S.gpu.bwHist) * 1.15));
+      S.gpu.bwMax = !S.gpu.bwMax || target > S.gpu.bwMax ? target : Math.max(target, S.gpu.bwMax * .97);
+    } else S.gpu.bwMax = 100;
   } else geigers.gpu.u = 0;
   if (!document.hidden) render();
 }
@@ -1113,12 +1372,15 @@ function render() {
   if (compact) return;
 
   if (g.bw_gbps != null) {
-    put('gpu-bw', g.bw_gbps >= 100 ? fmt(g.bw_gbps) : fmt(g.bw_gbps, 1));
-    putWidth('gpu-bw-bar', g.bw_gbps / S.gpu.bwPeak);
-    put('gpu-bw-peak', g.bw_peak_gbps ? `peak ${fmt(g.bw_peak_gbps)} GB/s` : '');
-    put('gpu-bw-note', 'Estimated from memory-controller busy time');
+    const r = rate(g.bw_gbps);
+    put('gpu-bw', r.v);
+    put('gpu-bw-unit', r.u);
+    putWidth('gpu-bw-bar', g.bw_gbps / S.gpu.bwMax);
+    put('gpu-bw-peak', g.bw_peak_gbps ? `peak ${rateText(g.bw_peak_gbps)}` : '');
+    put('gpu-bw-note', `graph and bar to ${rateText(S.gpu.bwMax)}`);
   } else {
     put('gpu-bw', g.mem_util == null ? '—' : `${fmt(g.mem_util)}%`);
+    put('gpu-bw-unit', '');
     putWidth('gpu-bw-bar', (g.mem_util ?? 0) / 100);
     put('gpu-bw-peak', '');
     put('gpu-bw-note', 'Memory-controller busy. Pass --amd-peak-bw for GB/s');
@@ -1161,24 +1423,34 @@ function renderProcs(key, procs, memKey, emptyText, compact) {
 const procRows = { cpu: [], gpu: [] };
 
 /* ---------- animation loop: 30 fps, and each part redraws only when something changed */
-const FRAME_MS = 1000 / 30;
-let last = performance.now();
+/* 24 frames a second, like film, with a 180-degree shutter: each frame shows what moved during the
+   first half of its interval, so motion reads as blur instead of strobing. Frames land on a 24 Hz
+   grid (on a 60 Hz screen that alternates 33 and 50 ms, averaging 41.7), never "at least 41.7 ms
+   apart", which a 60 Hz rAF would round down to 20 fps. ?cap=N overrides the rate. */
+const FPS = +params.get('cap') || 24, FRAME_MS = 1000 / FPS, SHUTTER = .5;
+let last = performance.now(), due = 0, drawnFrames = 0;
 function frame(t) {
   requestAnimationFrame(frame);
-  if (t - last < FRAME_MS - 2) return;
+  if (t < due - 4) return;
+  due = Math.max(due + FRAME_MS, t + FRAME_MS * .5);    // stay on the grid; skip ahead after a stall
+  drawnFrames++;
   const dt = Math.min(.1, (t - last) / 1000), now = t / 1000; last = t;
+  const shut = reduceMotion ? 0 : dt * SHUTTER;           // seconds the shutter was open this frame
   for (const k of ['cpu', 'gpu']) {
     const s = S[k];
     s.load.step(dt); s.temp.step(dt);
     geigers[k].step(dt, now);
     if (k === 'gpu' && !s.present) continue;
     const canvas = $(`${k}-dial`);
-    const key = `${s.load.x.toFixed(4)}|${s.temp.x.toFixed(4)}|${s.tempC == null ? '' : Math.round(s.tempC)}`;
-    if (key !== s.shown || stale.has(canvas)) { s.shown = key; stale.delete(canvas); drawDial(canvas, s.load.x, s.temp.x, s.tempC, ACC[k], s.zones); }
-    geigers[k].draw(now);
+    const lf = s.load.x - s.load.v * shut, tf = s.temp.x - s.temp.v * shut;   // where the needles were when it opened
+    const key = `${s.load.x.toFixed(4)}|${lf.toFixed(4)}|${s.temp.x.toFixed(4)}|${tf.toFixed(4)}|${s.tempC == null ? '' : Math.round(s.tempC)}`;
+    if (key !== s.shown || stale.has(canvas)) { s.shown = key; stale.delete(canvas); drawDial(canvas, s.load.x, s.temp.x, s.tempC, ACC[k], s.zones, lf, tf); }
+    geigers[k].draw(now, shut);
   }
-  if (!deck.classList.contains('compact')) { cores.step(dt); cores.draw(); }
-  const f = clamp((t - sampleAt) / sampleMs);
+  if (!deck.classList.contains('compact')) { cores.step(dt, t); cores.draw(); }
+  // A 60 s sparkline scrolls well under a pixel per frame, so in LITE it steps 4 times per sample
+  // (8 a second) instead of redrawing every frame; it looks the same and costs a third.
+  const f = LITE ? Math.floor(clamp((t - sampleAt) / sampleMs) * 4) / 4 : clamp((t - sampleAt) / sampleMs);
   for (const [canvas, spec] of sparks) {
     const sz = sizes.get(canvas);
     if (!sz || sz.w < 2) continue;
@@ -1187,6 +1459,7 @@ function frame(t) {
     drawSpark(canvas, spec, f);
   }
   if (toFit.size) fitClips();
+  if (LITE) { stepBars(dt); stepDrift(now); }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { last = performance.now(); render(); } });
 
@@ -1311,21 +1584,60 @@ function demo() {
 }
 
 /* ---------- controls */
-$('sound').addEventListener('click', e => {
-  const on = !audio.on;
-  if (on) { if (!audio.enable()) return; } else audio.on = false;
-  e.currentTarget.setAttribute('aria-pressed', on);
+function setSound(on) {
+  audio.on = on;
+  if (!audio.sync()) on = audio.on = false;
+  $('sound').setAttribute('aria-pressed', on);
   $('sound-text').textContent = on ? 'Clicks on' : 'Clicks off';
   $('wave').setAttribute('opacity', on ? '1' : '.35');
-});
-function setCompact(on) {
-  $('deck').classList.toggle('compact', on);
-  $('compact').setAttribute('aria-pressed', on);
-  try { localStorage.setItem('pcmeter.compact', on ? '1' : '0'); } catch {}
+  for (const key of ['cpu', 'gpu']) $(`${key}-snd`).classList.toggle('master-off', !on);
+}
+$('sound').addEventListener('click', () => setSound(!audio.on));
+
+function showCardSound(key) {
+  const box = $(`${key}-snd`), btn = box.querySelector('.snd-btn'), s = snd[key];
+  const label = key.toUpperCase(), pct = Math.round(s.vol * 100);
+  btn.setAttribute('aria-pressed', !s.muted);
+  btn.title = s.muted ? `Unmute ${label} clicks` : `Mute ${label} clicks`;
+  box.querySelector('input').value = pct;
+  box.querySelector('output').textContent = `${pct}%`;
+}
+function setCardSound(key, change) {
+  Object.assign(snd[key], change);
+  try { localStorage.setItem(`pcmeter.snd.${key}`, JSON.stringify(snd[key])); } catch {}
+  audio.level(key);
+  audio.sync();
+  showCardSound(key);
+}
+let wantMaster = on => setSound(on);   // a gadget routes this through its shell instead
+for (const key of ['cpu', 'gpu']) {
+  const box = $(`${key}-snd`);
+  box.querySelector('.snd-btn').addEventListener('click', () => {
+    const unmute = snd[key].muted;
+    setCardSound(key, { muted: !unmute, vol: unmute && !snd[key].vol ? .6 : snd[key].vol });
+    if (unmute && !audio.on) wantMaster(true);   // unmuting a card means "let me hear it"
+  });
+  box.querySelector('input').addEventListener('input', e => {
+    const vol = e.target.value / 100;
+    setCardSound(key, { vol, muted: vol === 0 ? true : snd[key].muted });
+  });
+  showCardSound(key);
+}
+/* Views: full; compact (dials and activity); gauges (name and dial only). Gauges implies compact,
+   so everything that skips hidden detail while compact skips it there too. */
+const VIEWS = ['full', 'compact', 'gauge'];
+function setView(v) {
+  if (!VIEWS.includes(v)) v = 'full';
+  $('deck').classList.toggle('compact', v !== 'full');
+  $('deck').classList.toggle('gauge', v === 'gauge');
+  document.body.classList.toggle('gauge', v === 'gauge');
+  $('view').value = v;
+  try { localStorage.setItem('pcmeter.view', v); } catch {}
+  document.querySelectorAll('canvas').forEach(c => stale.add(c));
   render();
 }
-$('compact').addEventListener('click', () => setCompact(!$('deck').classList.contains('compact')));
-try { if (localStorage.getItem('pcmeter.compact') === '1') setCompact(true); } catch {}
+$('view').addEventListener('change', e => setView(e.target.value));
+try { setView(localStorage.getItem('pcmeter.view') || (localStorage.getItem('pcmeter.compact') === '1' ? 'compact' : 'full')); } catch { setView('full'); }
 for (const key of ['cpu', 'gpu']) {
   const fold = $(`${key}-fold`), store = `pcmeter.fold.${key}`;
   try { fold.open = localStorage.getItem(store) === '1'; } catch {}
@@ -1348,7 +1660,96 @@ let savedSkin = params.get('skin');
 try { savedSkin = savedSkin || localStorage.getItem('pcmeter.skin'); } catch {}
 setSkin(savedSkin || 'glass');
 
+/* ---------- desktop gadget (?gadget=cpu|gpu): one card per window, moved, sized, dismissed and
+   configured through the shell (backend/desktop.py) over QWebChannel. */
+if (GADGET) (() => {
+  document.documentElement.classList.add('gadget');
+  document.body.classList.add('gadget');
+  const card = $(`${GADGET}-card`);
+  for (const k of ['cpu', 'gpu']) if (k !== GADGET) $(`${k}-card`).classList.add('off');
+  const pane = document.createElement('div');
+  pane.className = 'pane';
+  card.prepend(pane);
+
+  const ctl = document.createElement('div');
+  ctl.className = 'gctl';
+  ctl.innerHTML =
+    '<button class="gbtn menu" type="button" title="Menu" aria-label="Menu"><svg viewBox="0 0 10 10" aria-hidden="true"><circle cx="1.8" cy="5" r="1.05"/><circle cx="5" cy="5" r="1.05"/><circle cx="8.2" cy="5" r="1.05"/></svg></button>' +
+    '<button class="gbtn close" type="button" title="Dismiss" aria-label="Dismiss"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>';
+  card.append(ctl);
+  for (const [side, edges] of [['w', 1], ['e', 2]]) {   // Qt.Edge bits: left 1, right 2
+    const h = document.createElement('div');
+    h.className = `rs ${side}`; h.dataset.edges = edges;
+    document.body.append(h);
+  }
+
+  let host = null, lastKey = '';
+  const call = (fn, ...args) => host && host[fn](...args);
+  const GAUGE_WIDTH = 208;   // the dial (176) plus the card's padding and border
+  function report() {
+    const gauge = document.body.classList.contains('gauge');
+    const h = Math.ceil(card.getBoundingClientRect().height);
+    const r = parseFloat(getComputedStyle(card).borderTopLeftRadius) || 0;
+    const w = gauge ? GAUGE_WIDTH : 0;     // 0: the width the user chose
+    const key = `${w}|${h}|${r}`;
+    if (h > 0 && key !== lastKey) { lastKey = key; call('setSize', w, h, r); }
+  }
+  wantMaster = on => call('setSound', on);
+  new ResizeObserver(report).observe(card);
+  function apply(json) {
+    let s = {};
+    try { s = JSON.parse(json) || {}; } catch {}
+    if (s.skin) setSkin(s.skin);
+    setView(s.view || 'full');
+    setSound(!!s.sound);
+    report();
+  }
+  (window.pcmeterHost || Promise.reject()).then(h => {
+    host = h;
+    h.settingsChanged.connect(apply);
+    h.settings(apply);
+  }, () => {});
+
+  const control = e => e.target.closest('button, summary, a, select, input, .rs');
+  card.addEventListener('mousedown', e => {
+    if (e.button !== 0 || control(e)) return;
+    e.preventDefault();
+    call('startMove');
+  });
+  document.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    call('showMenu', Math.round(e.clientX), Math.round(e.clientY));
+  });
+  document.querySelectorAll('.rs').forEach(h => h.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    call('startResize', +h.dataset.edges);
+  }));
+  ctl.querySelector('.menu').addEventListener('click', e => {
+    const r = e.currentTarget.getBoundingClientRect();
+    call('showMenu', Math.round(r.left), Math.round(r.bottom + 4));
+  });
+  ctl.querySelector('.close').addEventListener('click', () => call('dismiss'));
+})();
+
+/* ?fps: log frame pacing every 5 s (the desktop shell prints page console lines with PCMETER_DEBUG=1):
+   the display's rAF rate, and how many frames the capped loop actually drew. */
+if (params.has('fps')) (() => {
+  let last = 0, gaps = [], drawn0 = 0;
+  const tick = t => {
+    if (last) gaps.push(t - last);
+    last = t;
+    if (gaps.length && gaps.reduce((a, b) => a + b, 0) >= 5000) {
+      const g = gaps.slice().sort((a, b) => a - b), q = f => g[Math.min(g.length - 1, Math.floor(f * g.length))];
+      console.log(`drawn ${((drawnFrames - drawn0) / 5).toFixed(1)}/s  rAF ${(g.length / 5).toFixed(1)}/s p95 ${q(.95).toFixed(1)}ms max ${g[g.length - 1].toFixed(1)}ms`);
+      gaps = []; drawn0 = drawnFrames;
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})();
+
 connect();
-requestAnimationFrame(frame);
+if (!params.has('noframe')) requestAnimationFrame(frame);   // ?noframe: data only, no animation (profiling)
 })();
 </script>

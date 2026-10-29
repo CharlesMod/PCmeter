@@ -1,2 +1,4 @@
 psutil>=5.9
 nvidia-ml-py>=12.535  # optional, NVIDIA GPUs
+PySide6-Essentials>=6.7  # optional, the desktop window (Qt WebEngine)
+PySide6-WebEngine>=6.7   # optional, the desktop window (Qt WebEngine)

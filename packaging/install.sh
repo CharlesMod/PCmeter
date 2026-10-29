@@ -6,19 +6,24 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 bin="$HOME/.local/bin"
+lib="$HOME/.local/lib/pcmeter"
 apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
 desktop=$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")
 
 if [ "$1" = "--uninstall" ]; then
+  rm -rf "$lib"
   rm -f "$bin/pcmeter" "$apps/pcmeter.desktop" "$icons/pcmeter.svg" "$desktop/pcmeter.desktop"
   command -v update-desktop-database >/dev/null && update-desktop-database "$apps" 2>/dev/null || true
   echo "PCmeter removed."
   exit 0
 fi
 
-mkdir -p "$bin" "$apps" "$icons"
-install -m 755 "$here/pcmeter" "$bin/pcmeter"
+mkdir -p "$bin" "$apps" "$icons" "$(dirname "$lib")"
+rm -rf "$lib.new"
+cp -r "$here/pcmeter" "$lib.new"
+rm -rf "$lib" && mv "$lib.new" "$lib"          # a running copy keeps its old files until it exits
+ln -sfn "$lib/pcmeter" "$bin/pcmeter"
 install -m 644 "$here/pcmeter.svg" "$icons/pcmeter.svg"
 cat > "$apps/pcmeter.desktop" <<DESKTOP
 [Desktop Entry]
@@ -32,6 +37,7 @@ Terminal=false
 Categories=System;Monitor;
 Keywords=cpu;gpu;temperature;monitor;
 StartupNotify=false
+StartupWMClass=pcmeter
 DESKTOP
 chmod 755 "$apps/pcmeter.desktop"
 

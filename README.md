@@ -26,11 +26,21 @@ That puts PCmeter in `~/.local/bin` and adds an app-menu entry and a desktop
 shortcut; nothing outside your home folder changes. On KDE Plasma, the first click on
 the desktop icon may ask whether to run it. `./install.sh --uninstall` removes it all.
 
-The shortcut runs `pcmeter --app`: it opens PCmeter in its own window (using Chrome,
-Chromium, Brave, Edge or Vivaldi if one is installed, natively or as a Flatpak;
-otherwise your default browser), reuses a copy that is already running, and quits
-20 seconds after you close the last window. NVIDIA cards need the proprietary driver;
-AMD cards work out of the box.
+The shortcut runs `pcmeter --app`, which shows the CPU and GPU cards as desktop gadgets: each card is
+its own frameless, translucent window with the desktop blurred behind it, and there is no outer
+window. Drag a card anywhere to move it, drag its left or right edge to change its width, and hover
+it for its menu and dismiss buttons. The menu (also in the system tray) picks the skin, the view
+(Full, Compact, or Gauges only), clicks, keep-on-top, and which cards are shown. Launching PCmeter
+again brings back any card you dismissed. On KDE Plasma (Wayland) the cards return to where you left
+them. NVIDIA cards need the proprietary driver; AMD cards work out of the box.
+
+The gadgets draw on the CPU only, at 24 frames a second with film-style motion blur, so watching the
+GPU never wakes it. `PCMETER_RENDER=gpu` lets them use the GPU instead. `pcmeter --app --browser`
+opens the old single-page app window in Chrome, Chromium, Brave, Edge or Vivaldi instead.
+
+**Clicks**: each card's activity strip has a speaker button that mutes or unmutes that card (cards
+start muted) and a volume slider on hover; the toolbar's Clicks button (in the gadgets, the menu) is
+the master switch.
 
 ## Run from source
 
@@ -42,13 +52,14 @@ python3 backend/pcmeter.py --open
 The UI is served at http://127.0.0.1:8765. Add `?demo` to see simulated data, or
 open `web/index.html` directly from disk.
 
-**Compact** hides the detail and puts a 60-second load graph in each card's header.
+**Compact** hides the detail and puts a 60-second load graph in each card's header. **Gauges** shows only each card's name and dial.
 
 | Flag | What it does |
 | --- | --- |
 | `--interval 0.5` | Seconds between samples |
 | `--amd-peak-bw 960` | Peak VRAM bandwidth in GB/s for AMD cards, so throughput shows in GB/s |
 | `--port 8765` / `--host` | Where to listen |
+| `--app` / `--app --browser` | Desktop gadgets, or a browser app window |
 
 ## What is measured
 
@@ -57,8 +68,10 @@ open `web/index.html` directly from disk.
 - **NVIDIA** (NVML): load, temperature, clocks, power, fan, VRAM, top 10 processes
   with per-process load and VRAM.
 - **AMD** (amdgpu sysfs): the same, with per-process data from `/proc/<pid>/fdinfo`.
-- **VRAM throughput** is an estimate: memory-controller busy % x peak bandwidth
-  (memory clock x bus width x 2). NVML has no direct bytes-per-second counter.
+- **VRAM throughput** is an estimate: memory-controller busy % x bandwidth at the current memory
+  clock (clock x bus width x 2), shown in MB/s or GB/s. The busy % is averaged over every driver
+  sample between updates. NVML has no direct bytes-per-second counter, and its GPM DRAM counter
+  reads zero on GeForce cards without profiling rights. The graph scales to recent traffic.
 - **Activity** is a Poisson process whose rate rises steeply with load, from about
   25 counts per minute at idle to about 4,800 at full load. *Clicks* plays them
   as audio, CPU on the left channel and GPU on the right.

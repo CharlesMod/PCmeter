@@ -3,8 +3,10 @@
 
 Run:  python3 backend/pcmeter.py --open
 Then the UI lives at http://127.0.0.1:8765 and the raw stream at /stream (Server-Sent Events).
-With --app (what the desktop shortcut uses) it opens its own window, reuses a copy that is
-already running, and quits once its last window has been closed for a while.
+With --app (what the desktop shortcut uses) it shows the CPU and GPU cards as desktop gadgets:
+one frameless, translucent window per card, with no outer window (see desktop.py). With --app --browser it opens
+a Chromium app window instead, reuses a copy that is already running, and quits once its last
+window has been closed for a while.
 
 Sources
   CPU    psutil (all platforms); RAPL package power on Linux when readable.
@@ -34,7 +36,7 @@ try:
 except ImportError:
     pynvml = None
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 # A PyInstaller build unpacks the web UI next to the code in sys._MEIPASS.
 WEB_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "web"
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -258,6 +260,7 @@ class NvidiaGpu:
         self.max_mem_clock = self._try(n.nvmlDeviceGetMaxClockInfo, n.NVML_CLOCK_MEM)
         self.power_limit = self._try(n.nvmlDeviceGetEnforcedPowerLimit)
         self.last_proc_ts = 0
+        self.last_mem_ts = 0
         self.procs = []
         self.next_proc_scan = 0.0
 
@@ -272,6 +275,21 @@ class NvidiaGpu:
         if not (mem_clock_mhz and self.bus_width):
             return None
         return mem_clock_mhz * 1e6 * self.bus_width * 2 / 8 / 1e9
+
+    def _mem_busy(self):
+        """Memory-controller busy %, averaged over every driver sample since the last call. The driver
+        samples several times a second in whole percents; the average resolves far finer steps."""
+        try:
+            _, samples = pynvml.nvmlDeviceGetSamples(self.h, pynvml.NVML_MEMORY_UTILIZATION_SAMPLES, self.last_mem_ts)
+        except pynvml.NVMLError:
+            return None
+        fresh = [s for s in samples if s.timeStamp > self.last_mem_ts]
+        if not fresh:
+            return None
+        self.last_mem_ts = max(s.timeStamp for s in fresh)
+        if len(fresh) > 12:          # the first call returns the whole buffer; keep about the last second
+            fresh = fresh[-12:]
+        return sum(s.sampleValue.uiVal for s in fresh) / len(fresh)
 
     def _scan_procs(self):
         n = pynvml
@@ -299,7 +317,9 @@ class NvidiaGpu:
         if now >= self.next_proc_scan:
             self._scan_procs()
             self.next_proc_scan = now + 1.0
-        mem_util = rates.memory if rates else None
+        mem_util = self._mem_busy()
+        if mem_util is None and rates:
+            mem_util = float(rates.memory)
         bw_now = self._bandwidth(mem_clock)
         return {
             "name": self.name,
@@ -428,9 +448,35 @@ class AmdGpu:
         }
 
 
+# Where a container (distrobox, toolbox, the Claude desktop app) mounts the host's root: NVML lives
+# in the host's driver, so when the default library path has no libnvidia-ml, look for it there.
+HOST_NVML = ("/run/host/usr/lib64/libnvidia-ml.so.1", "/run/host/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1",
+             "/run/host/usr/lib/libnvidia-ml.so.1", "/run/host/usr/lib/aarch64-linux-gnu/libnvidia-ml.so.1")
+
+
+def load_nvml():
+    """Make pynvml usable, falling back to the host's libnvidia-ml when running inside a container."""
+    if pynvml is None:
+        return False
+    import ctypes
+    try:
+        ctypes.CDLL("libnvidia-ml.so.1")
+        return True
+    except OSError:
+        pass
+    for path in HOST_NVML:
+        if Path(path).exists():
+            try:
+                pynvml.nvmlLib = ctypes.CDLL(path)
+                return True
+            except OSError:
+                continue
+    return False
+
+
 def detect_gpus(amd_peak_bw=None):
     gpus = []
-    if pynvml is not None:
+    if load_nvml():
         try:
             pynvml.nvmlInit()
             for i in range(pynvml.nvmlDeviceGetCount()):
@@ -622,27 +668,50 @@ def main():
     ap.add_argument("--amd-peak-bw", type=float, help="AMD peak VRAM bandwidth in GB/s (sysfs does not expose it)")
     ap.add_argument("--open", action="store_true", help="open the UI in a browser")
     ap.add_argument("--app", action="store_true",
-                    help="open in an app window, reuse a running copy, quit after the last window closes")
+                    help="show the CPU and GPU cards as desktop gadgets (frameless, translucent, one window each)")
+    ap.add_argument("--browser", action="store_true",
+                    help="with --app, use a Chromium app window instead of the desktop window; "
+                         "reuses a running copy and quits after the last window closes")
     ap.add_argument("--idle-exit", type=float, default=20, metavar="SECONDS",
-                    help="with --app, how long to wait after the last window closes (default 20)")
+                    help="with --app --browser, how long to wait after the last window closes (default 20)")
     ap.add_argument("--version", action="version", version=f"PCmeter {__version__}")
     args = ap.parse_args()
 
-    if args.app and running_copy(args.host, args.port):
+    desktop = None
+    if args.app and not args.browser:
+        try:
+            import desktop
+        except ImportError as exc:
+            print(f"Desktop gadgets unavailable ({exc}); using a browser window instead.", file=sys.stderr)
+    if args.app and desktop is None and running_copy(args.host, args.port):
         open_window(f"http://{args.host}:{args.port}/")
         return
-    telemetry = Telemetry(args.interval, args.amd_peak_bw)
-    try:
-        server = ThreadingHTTPServer((args.host, args.port), make_handler(telemetry))
-    except OSError:
-        if not args.app:
-            raise
-        server = ThreadingHTTPServer((args.host, 0), make_handler(telemetry))   # port taken by something else
-    server.daemon_threads = True
-    url = f"http://{args.host}:{server.server_address[1]}/"
-    threading.Thread(target=telemetry.run, daemon=True).start()
-    gpu_names = ", ".join(g.name for g in telemetry.gpus) or "none found"
-    print(f"PCmeter {__version__} on {url}\n  CPU: {telemetry.cpu.name}\n  GPU: {gpu_names}", flush=True)
+
+    def start():
+        """Start sampling and serving; returns (telemetry, server, url)."""
+        telemetry = Telemetry(args.interval, args.amd_peak_bw)
+        try:
+            server = ThreadingHTTPServer((args.host, args.port), make_handler(telemetry))
+        except OSError:
+            if not args.app:
+                raise
+            server = ThreadingHTTPServer((args.host, 0), make_handler(telemetry))   # port taken by something else
+        server.daemon_threads = True
+        url = f"http://{args.host}:{server.server_address[1]}/"
+        threading.Thread(target=telemetry.run, daemon=True).start()
+        gpu_names = ", ".join(g.name for g in telemetry.gpus) or "none found"
+        print(f"PCmeter {__version__} on {url}\n  CPU: {telemetry.cpu.name}\n  GPU: {gpu_names}", flush=True)
+        return telemetry, server, url
+
+    if desktop is not None:
+        # Qt owns the main thread; the server runs beside it and dies with the gadgets.
+        def serve_in_background():
+            _, server, url = start()
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            return url
+        sys.exit(desktop.run(serve_in_background))
+
+    telemetry, server, url = start()
     if args.app:
         threading.Thread(target=quit_when_closed, args=(telemetry, server, args.idle_exit), daemon=True).start()
         open_window(url)

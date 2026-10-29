@@ -12,8 +12,9 @@ cd PCmeter-*-linux-x86_64
 
 You get a **PCmeter** icon on your desktop and in the app menu. Everything installs inside your home folder, so it works on immutable systems. Remove it with `./install.sh --uninstall`.
 
-- Opens in its own app window when Chrome, Chromium, Brave, Edge or Vivaldi is installed (native or Flatpak); otherwise in your default browser.
-- Clicking the icon again reuses the running copy. PCmeter quits 20 seconds after you close its last window, and uses no CPU while no window is open.
+- The CPU and GPU cards are desktop gadgets: frameless, translucent windows you drag anywhere, resize, condense to gauges only, or dismiss. Skin, view, clicks and keep-on-top live in the card menu and the system tray.
+- Drawn on the CPU at 24 fps with motion blur, so it never wakes the GPU it is watching.
+- Clicking the icon again brings back dismissed cards. Quit from the tray or the card menu.
 - NVIDIA GPUs need the proprietary driver (Bazzite's NVIDIA images include it). AMD GPUs work out of the box.
 - On KDE Plasma, the first click on the desktop icon may ask whether to run it.
 
