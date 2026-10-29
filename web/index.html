@@ -315,6 +315,7 @@ body.widget { background: transparent; }
   position: relative;
   container-type: inline-size;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   padding: 16px 16px 16px;
   border-radius: var(--radius);
@@ -331,7 +332,8 @@ body.widget { background: transparent; }
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(70% 45% at 22% 26%, color-mix(in srgb, var(--acc) var(--card-glow), transparent), transparent 70%);
 }
-.card > * { position: relative; }
+/* Children may never widen the card: long process names ellipsize instead. */
+.card > * { position: relative; min-width: 0; }
 
 .head { display: flex; align-items: flex-start; gap: 12px; }
 .head .id { min-width: 0; flex: 1; }
@@ -411,10 +413,11 @@ body.widget { background: transparent; }
 .bw-val small { font: 500 12px var(--f-ui); color: var(--ink-2); margin-left: 4px; letter-spacing: 0; }
 .meter { height: 6px; border-radius: 6px; background: rgba(var(--fg),.08); overflow: hidden; }
 .meter i {
-  display: block; height: 100%; width: 0; border-radius: inherit;
+  display: block; height: 100%; width: 100%; border-radius: inherit;
+  transform: scaleX(0); transform-origin: left center;
   background: linear-gradient(90deg, color-mix(in srgb, var(--acc) 45%, transparent), var(--acc));
   box-shadow: 0 0 10px color-mix(in srgb, var(--acc) 60%, transparent);
-  transition: width .45s cubic-bezier(.2,.7,.3,1);
+  transition: transform .45s cubic-bezier(.2,.7,.3,1);
 }
 .meter.thin { height: 3px; margin-top: 5px; }
 .foot { display: flex; justify-content: space-between; gap: 10px; font-size: 10.5px; color: var(--ink-3); }
@@ -448,6 +451,7 @@ body.widget { background: transparent; }
 .fold > summary:hover { background: rgba(var(--fg),.05); }
 .fold > summary:focus-visible { outline: 2px solid var(--acc); outline-offset: 0; }
 .fold h3 {
+  flex: none;
   margin: 0; display: flex; align-items: center; gap: 7px;
   font: 600 10.5px var(--f-ui); letter-spacing: .16em; text-transform: uppercase; color: var(--ink-2);
 }
@@ -628,8 +632,9 @@ let css = getComputedStyle(document.documentElement);
 const tok = n => css.getPropertyValue(n).trim();
 function hexToRgb(h) { h = h.replace('#', ''); if (h.length === 3) h = [...h].map(c => c + c).join(''); const n = parseInt(h, 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
 const tint = hex => { const [r, g, b] = hexToRgb(hex); return a => `rgba(${r},${g},${b},${a})`; };
-let C, ACC, T, fg;
+let C, ACC, T, fg, themeId = 0;
 function readTheme() {
+  themeId++;
   css = getComputedStyle(document.documentElement);
   C = { ink: tok('--ink'), ink3: tok('--ink-3'), cool: tint(tok('--cool')), warn: tint(tok('--warn')), hot: tint(tok('--hot')) };
   ACC = { cpu: tint(tok('--cpu')), gpu: tint(tok('--gpu')) };
@@ -642,15 +647,29 @@ function readTheme() {
 }
 readTheme();
 
-/* ---------- canvas helpers */
+/* ---------- canvas helpers
+   Sizes come from a ResizeObserver, so drawing never forces a layout. A canvas that is
+   hidden (compact mode, folded) has no size and is skipped; when it reappears it repaints. */
+const sizes = new Map();
+const painters = new Map();   // canvas -> repaint from the last data (sparklines)
+const stale = new Set();      // canvases cleared by a resize, waiting for the frame loop
+const ro = new ResizeObserver(entries => {
+  for (const e of entries) {
+    const c = e.target, d = Math.min(2, devicePixelRatio || 1);
+    const w = e.contentRect.width, h = e.contentRect.height;
+    sizes.set(c, { w, h, d, ctx: c.getContext('2d') });
+    c.width = Math.max(1, Math.round(w * d)); c.height = Math.max(1, Math.round(h * d));
+    if (painters.has(c)) painters.get(c)(); else stale.add(c);
+  }
+});
+document.querySelectorAll('canvas').forEach(c => ro.observe(c));
 function fit(c) {
-  const r = c.getBoundingClientRect(), d = Math.min(2, devicePixelRatio || 1);
-  const w = Math.max(1, Math.round(r.width * d)), h = Math.max(1, Math.round(r.height * d));
-  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-  const ctx = c.getContext('2d'); ctx.setTransform(d, 0, 0, d, 0, 0); ctx.clearRect(0, 0, r.width, r.height);
-  return { ctx, w: r.width, h: r.height };
+  const s = sizes.get(c);
+  if (!s || s.w < 2 || s.h < 2) return null;
+  s.ctx.setTransform(s.d, 0, 0, s.d, 0, 0); s.ctx.clearRect(0, 0, s.w, s.h);
+  return s;
 }
-function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h); }
+function rrect(ctx, x, y, w, h, r) { if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h); }
 
 /* Needle with a little mass: a slightly underdamped spring, like a real meter movement. */
 class Spring {
@@ -660,6 +679,7 @@ class Spring {
     const k = 58, c = 11.5;
     this.v += (k * (this.t - this.x) - c * this.v) * dt;
     this.x += this.v * dt;
+    if (Math.abs(this.t - this.x) < 1e-4 && Math.abs(this.v) < 1e-3) { this.x = this.t; this.v = 0; }
     return this.x;
   }
 }
@@ -679,101 +699,127 @@ function pointer(ctx, cx, cy, a, r0, r1, w, glow) {
 const A0 = 0.75 * Math.PI, SWEEP = 1.5 * Math.PI;
 const angle = v => A0 + SWEEP * clamp(v);
 const TEMP_MIN = 20, TEMP_MAX = 100;
+const tempNorm = t => (t - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
 
-/* Dual dial: load on the main face, temperature on the inset sub-dial in the bottom gap. */
-function drawDial(canvas, load, tempNorm, tempC, acc, zones) {
-  const { ctx, w, h } = fit(canvas);
+function dialGeometry(w, h) {
   const cx = w / 2, cy = h * 0.455, R = Math.min(w / 2 - 6, cy - 4);
-
-  // face
-  const face = ctx.createRadialGradient(cx, cy - R * .5, R * .1, cx, cy, R);
-  face.addColorStop(0, T.faceHi); face.addColorStop(1, T.faceLo);
-  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fillStyle = face; ctx.fill();
-  ctx.lineWidth = 1; ctx.strokeStyle = fg(.10); ctx.stroke();
-
-  // ticks: every 2%, major every 10%, lit up to the needle
-  for (let i = 0; i <= 50; i++) {
-    const v = i / 50, a = angle(v), major = i % 5 === 0;
-    const r1 = R - 4, r0 = R - (major ? 12 : 7);
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
-    ctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
-    ctx.lineWidth = major ? 1.6 : 1;
-    ctx.strokeStyle = v <= load + 0.001 ? acc(major ? 1 : .75) : (major ? fg(.30) : fg(.12));
-    ctx.stroke();
+  return { cx, cy, R, ra: R - 30, sx: cx, sy: cy + R * .73, sr: R * .34 };
+}
+function tickPath(g, from, to) {
+  const majors = new Path2D(), minors = new Path2D();
+  for (let i = from; i <= to; i++) {
+    const a = angle(i / 50), major = i % 5 === 0, p = major ? majors : minors;
+    const r1 = g.R - 4, r0 = g.R - (major ? 12 : 7);
+    p.moveTo(g.cx + Math.cos(a) * r0, g.cy + Math.sin(a) * r0);
+    p.lineTo(g.cx + Math.cos(a) * r1, g.cy + Math.sin(a) * r1);
   }
+  return { majors, minors };
+}
+
+/* The parts of a dial that never move are drawn once per size and skin, then copied. */
+const dialBase = new Map();
+function dialLayer(canvas, s, zones) {
+  const key = `${s.w}x${s.h}@${s.d}|${themeId}|${zones}`;
+  const hit = dialBase.get(canvas);
+  if (hit && hit.key === key) return hit.layer;
+  const layer = document.createElement('canvas');
+  layer.width = Math.round(s.w * s.d); layer.height = Math.round(s.h * s.d);
+  const ctx = layer.getContext('2d'); ctx.scale(s.d, s.d);
+  const g = dialGeometry(s.w, s.h);
+  const face = ctx.createRadialGradient(g.cx, g.cy - g.R * .5, g.R * .1, g.cx, g.cy, g.R);
+  face.addColorStop(0, T.faceHi); face.addColorStop(1, T.faceLo);
+  ctx.beginPath(); ctx.arc(g.cx, g.cy, g.R, 0, Math.PI * 2); ctx.fillStyle = face; ctx.fill();
+  ctx.lineWidth = 1; ctx.strokeStyle = fg(.10); ctx.stroke();
+  const ticks = tickPath(g, 0, 50);
+  ctx.lineWidth = 1.6; ctx.strokeStyle = fg(.30); ctx.stroke(ticks.majors);
+  ctx.lineWidth = 1; ctx.strokeStyle = fg(.12); ctx.stroke(ticks.minors);
   ctx.font = `400 8.5px ${T.num}`; ctx.fillStyle = C.ink3; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
   for (const [v, t] of [[0, '0'], [0.5, '50'], [1, '100']]) {
-    const a = angle(v); ctx.fillText(t, cx + Math.cos(a) * (R - 21), cy + Math.sin(a) * (R - 21));
+    const a = angle(v); ctx.fillText(t, g.cx + Math.cos(a) * (g.R - 21), g.cy + Math.sin(a) * (g.R - 21));
   }
-
-  // value arc
-  const ra = R - 30;
   ctx.lineCap = 'round'; ctx.lineWidth = 4;
-  ctx.beginPath(); ctx.arc(cx, cy, ra, A0, A0 + SWEEP); ctx.strokeStyle = fg(.06); ctx.stroke();
-  if (load > 0.004) {
-    let stroke = acc(1);
-    if (ctx.createConicGradient) {
-      stroke = ctx.createConicGradient(A0, cx, cy);
-      stroke.addColorStop(0, acc(.25)); stroke.addColorStop(.75, acc(1)); stroke.addColorStop(1, acc(1));
-    }
-    ctx.save(); ctx.shadowColor = acc(.7); ctx.shadowBlur = 12 * T.glow;
-    ctx.beginPath(); ctx.arc(cx, cy, ra, A0, angle(load)); ctx.strokeStyle = stroke; ctx.stroke(); ctx.restore();
-  }
-  pointer(ctx, cx, cy, angle(load), ra - 9, R - 2, 2.2, acc(.9));
-
-  // readout
-  const pct = String(Math.round(clamp(load) * 100));
-  ctx.textBaseline = 'alphabetic';
-  ctx.font = `300 ${Math.round(R * .38)}px ${T.num}`;
-  const nw = ctx.measureText(pct).width;
-  ctx.font = `500 11px ${T.num}`;
-  const uw = ctx.measureText('%').width;
-  const x0 = cx - (nw + uw + 2) / 2;
-  ctx.textAlign = 'left'; ctx.fillStyle = C.ink;
-  ctx.font = `300 ${Math.round(R * .38)}px ${T.num}`; ctx.fillText(pct, x0, cy + R * .1);
-  ctx.font = `500 11px ${T.num}`; ctx.fillStyle = C.ink3; ctx.fillText('%', x0 + nw + 2, cy + R * .1);
-  ctx.textAlign = 'center'; ctx.font = `600 8px ${T.ui}`;
-  ctx.fillText('LOAD', cx, cy - R * .26);
-
-  // inset temperature sub-dial
-  const sx = cx, sy = cy + R * .73, sr = R * .34;
-  ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+  ctx.beginPath(); ctx.arc(g.cx, g.cy, g.ra, A0, A0 + SWEEP); ctx.strokeStyle = fg(.06); ctx.stroke();
+  ctx.font = `600 8px ${T.ui}`; ctx.fillStyle = C.ink3; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('LOAD', g.cx, g.cy - g.R * .26);
+  ctx.beginPath(); ctx.arc(g.sx, g.sy, g.sr, 0, Math.PI * 2);
   ctx.fillStyle = T.disc; ctx.fill();
   ctx.strokeStyle = fg(.14); ctx.lineWidth = 1; ctx.stroke();
-  const tv = t => (t - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
   const bands = [[TEMP_MIN, zones[0], C.cool], [zones[0], zones[1], C.warn], [zones[1], TEMP_MAX, C.hot]];
   ctx.lineCap = 'butt'; ctx.lineWidth = 2.5;
   for (const [a, b, col] of bands) {
-    ctx.beginPath(); ctx.arc(sx, sy, sr - 4, angle(tv(a)) + .03, angle(tv(b)) - .03); ctx.strokeStyle = col(.55); ctx.stroke();
+    ctx.beginPath(); ctx.arc(g.sx, g.sy, g.sr - 4, angle(tempNorm(a)) + .03, angle(tempNorm(b)) - .03); ctx.strokeStyle = col(.55); ctx.stroke();
   }
-  if (tempC != null) {
-    const zone = tempC >= zones[1] ? C.hot : tempC >= zones[0] ? C.warn : C.cool;
-    pointer(ctx, sx, sy, angle(tempNorm), sr * .5, sr - 1, 1.4, zone(.9));
-  }
-  ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `400 ${Math.round(sr * .42)}px ${T.num}`;
-  ctx.fillText(tempC == null ? '—' : `${Math.round(tempC)}°`, sx, sy + 1);
+  dialBase.set(canvas, { key, layer });
+  return layer;
 }
 
-/* Sparkline with area fill, faint midline and a lit endpoint. */
-function drawSpark(canvas, data, max, acc) {
-  const { ctx, w, h } = fit(canvas);
+/* Dual dial: load on the main face, temperature on the inset sub-dial in the bottom gap. */
+function drawDial(canvas, load, tNorm, tempC, acc, zones) {
+  const s = fit(canvas);
+  if (!s) return;
+  const { ctx, w, h } = s, g = dialGeometry(w, h);
+  ctx.drawImage(dialLayer(canvas, s, zones), 0, 0, w, h);
+
+  // ticks lit up to the needle
+  const lit = Math.floor(clamp(load) * 50 + 0.05);
+  if (load > 0.001) {
+    const ticks = tickPath(g, 0, lit);
+    ctx.lineWidth = 1.6; ctx.strokeStyle = acc(1); ctx.stroke(ticks.majors);
+    ctx.lineWidth = 1; ctx.strokeStyle = acc(.75); ctx.stroke(ticks.minors);
+  }
+
+  // value arc
+  if (load > 0.004) {
+    let stroke = acc(1);
+    if (ctx.createConicGradient) {
+      stroke = ctx.createConicGradient(A0, g.cx, g.cy);
+      stroke.addColorStop(0, acc(.25)); stroke.addColorStop(.75, acc(1)); stroke.addColorStop(1, acc(1));
+    }
+    ctx.save(); ctx.shadowColor = acc(.7); ctx.shadowBlur = 12 * T.glow;
+    ctx.lineCap = 'round'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(g.cx, g.cy, g.ra, A0, angle(load)); ctx.strokeStyle = stroke; ctx.stroke(); ctx.restore();
+  }
+  pointer(ctx, g.cx, g.cy, angle(load), g.ra - 9, g.R - 2, 2.2, acc(.9));
+
+  // readout
+  const pct = String(Math.round(clamp(load) * 100));
+  const big = `300 ${Math.round(g.R * .38)}px ${T.num}`, small = `500 11px ${T.num}`;
+  ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+  ctx.font = big; const nw = ctx.measureText(pct).width;
+  ctx.font = small; const uw = ctx.measureText('%').width;
+  const x0 = g.cx - (nw + uw + 2) / 2;
+  ctx.font = big; ctx.fillStyle = C.ink; ctx.fillText(pct, x0, g.cy + g.R * .1);
+  ctx.font = small; ctx.fillStyle = C.ink3; ctx.fillText('%', x0 + nw + 2, g.cy + g.R * .1);
+
+  // temperature needle and reading
+  if (tempC != null) {
+    const zone = tempC >= zones[1] ? C.hot : tempC >= zones[0] ? C.warn : C.cool;
+    pointer(ctx, g.sx, g.sy, angle(tNorm), g.sr * .5, g.sr - 1, 1.4, zone(.9));
+  }
+  ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `400 ${Math.round(g.sr * .42)}px ${T.num}`;
+  ctx.fillText(tempC == null ? '—' : `${Math.round(tempC)}°`, g.sx, g.sy + 1);
+}
+
+/* Sparkline with area fill, faint midline and a lit endpoint. Repaints itself after a resize. */
+function drawSpark(canvas, data, max, key) {
+  painters.set(canvas, () => drawSpark(canvas, data, max, key));
+  const s = fit(canvas);
+  if (!s) return;
+  const { ctx, w, h } = s, acc = ACC[key];
   const n = 120, pad = 3;
   ctx.strokeStyle = fg(.06); ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, h / 2 + .5); ctx.lineTo(w, h / 2 + .5); ctx.stroke();
   if (data.length < 2) return;
+  const line = new Path2D();
   const x = i => w - pad - (data.length - 1 - i) * (w - pad * 2) / (n - 1);
   const y = v => h - 2 - clamp(v / max) * (h - 5);
-  ctx.beginPath();
-  data.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
-  ctx.save();
-  ctx.lineTo(x(data.length - 1), h); ctx.lineTo(x(0), h); ctx.closePath();
+  data.forEach((v, i) => i ? line.lineTo(x(i), y(v)) : line.moveTo(x(i), y(v)));
+  const area = new Path2D(line);
+  area.lineTo(x(data.length - 1), h); area.lineTo(x(0), h); area.closePath();
   const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, acc(.30)); g.addColorStop(1, acc(0));
-  ctx.fillStyle = g; ctx.fill(); ctx.restore();
-  ctx.beginPath();
-  data.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
-  ctx.strokeStyle = acc(.95); ctx.lineWidth = 1.25; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.fillStyle = g; ctx.fill(area);
+  ctx.strokeStyle = acc(.95); ctx.lineWidth = 1.25; ctx.lineJoin = 'round'; ctx.stroke(line);
   const ex = x(data.length - 1), ey = y(data[data.length - 1]);
   ctx.save(); ctx.shadowColor = acc(1); ctx.shadowBlur = 8 * T.glow;
   ctx.beginPath(); ctx.arc(ex, ey, 2.4, 0, Math.PI * 2); ctx.fillStyle = T.needle; ctx.fill(); ctx.restore();
@@ -814,12 +860,14 @@ function poisson(m) {
   return k - 1;
 }
 
-/* Geiger counter: random counts whose rate climbs steeply with load. */
+/* Geiger counter: random counts whose rate climbs steeply with load.
+   Counts live in an array read from `head`, so expiring old ones costs nothing. */
+const ALPHA_STEPS = 8;
 class Geiger {
   constructor(key, pan, tone) {
     this.canvas = $(`${key}-geiger`); this.led = $(`${key}-led`); this.cpmEl = $(`${key}-cpm`);
     this.key = key; this.pan = pan; this.tone = tone;
-    this.u = 0; this.lit = 0; this.events = []; this.lastCpm = 0;
+    this.u = 0; this.lit = 0; this.ledShown = 0; this.ev = []; this.head = 0; this.lastCpm = 0; this.blank = false;
   }
   step(dt, now) {
     const u = clamp(this.u);
@@ -827,185 +875,247 @@ class Geiger {
     for (let i = 0; i < n; i++) {
       const off = Math.random() * dt;
       const amp = clamp(0.25 + u * 0.55 + (Math.random() - 0.5) * 0.5, 0.15, 1);
-      this.events.push({ t: now - off, amp });
+      this.ev.push(now - off, amp);
       this.lit = Math.min(1, this.lit + 0.45 + amp * 0.5);
       audio.click(this.pan, amp, this.tone, off);
     }
     this.lit *= Math.exp(-dt * 20);
-    this.led.style.opacity = this.lit.toFixed(3);
-    while (this.events.length && now - this.events[0].t > 10) this.events.shift();
-    if (now - this.lastCpm > 0.5) { this.lastCpm = now; this.cpmEl.textContent = (this.events.length * 6).toLocaleString(); }
+    const o = this.lit < .01 ? 0 : Math.round(this.lit * 50) / 50;
+    if (o !== this.ledShown) { this.led.style.opacity = o; this.ledShown = o; }
+    while (this.head < this.ev.length && now - this.ev[this.head] > 10) this.head += 2;
+    if (this.head > 2048) { this.ev = this.ev.slice(this.head); this.head = 0; }
+    if (now - this.lastCpm > 0.5) { this.lastCpm = now; put(`${this.key}-cpm`, ((this.ev.length - this.head) / 2 * 6).toLocaleString()); }
   }
   draw(now) {
-    const { ctx, w, h } = fit(this.canvas);
-    const mid = h / 2, speed = w / 6, acc = ACC[this.key];
+    const s = sizes.get(this.canvas);
+    if (!s || s.w < 2) return;
+    const { w, h } = s, mid = h / 2, speed = w / 6, acc = ACC[this.key];
+    const buckets = Array.from({ length: ALPHA_STEPS }, () => null), fresh = new Path2D();
+    let any = false, anyFresh = false;
+    for (let i = this.head; i < this.ev.length; i += 2) {
+      const age = now - this.ev[i], x = w - 2 - age * speed;
+      if (x < 0) continue;
+      const amp = this.ev[i + 1], hh = (h - 4) * amp;
+      let p;
+      if (age < 0.18) { p = fresh; anyFresh = true; }
+      else {
+        const alpha = .15 + .8 * Math.exp(-age * .45) * clamp(x / 40) * amp;
+        const b = Math.min(ALPHA_STEPS - 1, Math.floor(alpha * ALPHA_STEPS));
+        p = buckets[b] || (buckets[b] = new Path2D());
+      }
+      p.moveTo(x, mid - hh / 2); p.lineTo(x, mid + hh / 2);
+      any = true;
+    }
+    if (!any && this.blank && !stale.has(this.canvas)) return;   // nothing on screen and nothing to clear
+    stale.delete(this.canvas);
+    this.blank = !any;
+    const { ctx } = fit(this.canvas);
     ctx.strokeStyle = fg(.07); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, mid + .5); ctx.lineTo(w, mid + .5); ctx.stroke();
-    for (const e of this.events) {
-      const age = now - e.t, x = w - 2 - age * speed;
-      if (x < 0) continue;
-      const fade = Math.exp(-age * .45) * clamp(x / 40);
-      const hh = (h - 4) * e.amp;
-      ctx.beginPath(); ctx.moveTo(x, mid - hh / 2); ctx.lineTo(x, mid + hh / 2);
-      ctx.lineWidth = 1.4;
-      if (age < 0.18) { ctx.save(); ctx.shadowColor = acc(1); ctx.shadowBlur = 9 * T.glow; ctx.strokeStyle = T.needle; ctx.stroke(); ctx.restore(); }
-      else { ctx.strokeStyle = acc(.15 + .8 * fade * e.amp); ctx.stroke(); }
-    }
+    ctx.lineWidth = 1.4;
+    buckets.forEach((p, b) => { if (p) { ctx.strokeStyle = acc((b + .5) / ALPHA_STEPS); ctx.stroke(p); } });
+    if (anyFresh) { ctx.save(); ctx.shadowColor = acc(1); ctx.shadowBlur = 9 * T.glow; ctx.strokeStyle = T.needle; ctx.stroke(fresh); ctx.restore(); }
   }
 }
 
-/* Per-thread bars with peak-hold markers, like an audio level meter. */
+/* Per-thread bars with peak-hold markers, like an audio level meter. Redraws only while moving. */
 class Cores {
-  constructor(canvas) { this.c = canvas; this.t = []; this.v = []; this.pk = []; this.hold = []; }
+  constructor(canvas) { this.c = canvas; this.t = []; this.v = []; this.pk = []; this.hold = []; this.moving = true; }
   set(arr) {
     this.t = arr.map(x => x / 100);
     while (this.v.length < this.t.length) { this.v.push(0); this.pk.push(0); this.hold.push(0); }
     this.v.length = this.pk.length = this.hold.length = this.t.length;
+    this.moving = true;
   }
   step(dt) {
+    if (!this.moving) return;
     const k = reduceMotion ? 1 : 1 - Math.exp(-dt * 9);
+    let moving = false;
     for (let i = 0; i < this.t.length; i++) {
-      this.v[i] += (this.t[i] - this.v[i]) * k;
+      const dv = this.t[i] - this.v[i];
+      this.v[i] = Math.abs(dv) < 5e-4 ? this.t[i] : this.v[i] + dv * k;
       if (this.v[i] >= this.pk[i]) { this.pk[i] = this.v[i]; this.hold[i] = 1.2; }
       else if ((this.hold[i] -= dt) < 0) this.pk[i] = Math.max(this.v[i], this.pk[i] - dt * .3);
+      if (this.v[i] !== this.t[i] || this.pk[i] > this.v[i]) moving = true;
     }
+    this.moving = moving;
+    this.dirty = true;
   }
   draw() {
-    const { ctx, w, h } = fit(this.c), n = this.v.length, acc = ACC.cpu;
-    if (!n) return;
-    const gap = n > 24 ? 2 : 3, bw = (w - gap * (n - 1)) / n, H = h - 14;
+    if (!this.dirty && !stale.has(this.c)) return;
+    const s = fit(this.c), n = this.v.length;
+    if (!s || !n) return;
+    this.dirty = false; stale.delete(this.c);
+    const { ctx, w, h } = s, acc = ACC.cpu;
+    const gap = n > 24 ? 2 : 3, bw = (w - gap * (n - 1)) / n, H = h - 14, r = Math.min(2, bw / 2);
     const every = n <= 16 ? 1 : n <= 32 ? 4 : 8;
-    ctx.font = `400 8.5px ${T.num}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) rrect(ctx, i * (bw + gap), 0, bw, H, r);
+    ctx.fillStyle = fg(.05); ctx.fill();
+    const grad = ctx.createLinearGradient(0, H, 0, 0); grad.addColorStop(0, acc(.3)); grad.addColorStop(1, acc(1));
+    ctx.fillStyle = grad;
     for (let i = 0; i < n; i++) {
-      const x = i * (bw + gap), v = clamp(this.v[i]);
-      rrect(ctx, x, 0, bw, H, Math.min(2, bw / 2)); ctx.fillStyle = fg(.05); ctx.fill();
-      const bh = Math.max(1.5, v * H);
-      const g = ctx.createLinearGradient(0, H, 0, 0); g.addColorStop(0, acc(.3)); g.addColorStop(1, acc(1));
-      rrect(ctx, x, H - bh, bw, bh, Math.min(2, bw / 2)); ctx.fillStyle = g; ctx.globalAlpha = .35 + .65 * v; ctx.fill(); ctx.globalAlpha = 1;
-      const py = H - clamp(this.pk[i]) * H;
-      ctx.fillStyle = fg(.8); ctx.fillRect(x, Math.max(0, py - 1.5), bw, 1.5);
-      if (i % every === 0) { ctx.fillStyle = C.ink3; ctx.fillText(i, x + bw / 2, h - 1); }
+      const v = clamp(this.v[i]), bh = Math.max(1.5, v * H);
+      ctx.globalAlpha = .35 + .65 * v;
+      ctx.beginPath(); rrect(ctx, i * (bw + gap), H - bh, bw, bh, r); ctx.fill();
     }
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) ctx.rect(i * (bw + gap), Math.max(0, H - clamp(this.pk[i]) * H - 1.5), bw, 1.5);
+    ctx.fillStyle = fg(.8); ctx.fill();
+    ctx.font = `400 8.5px ${T.num}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = C.ink3;
+    for (let i = 0; i < n; i += every) ctx.fillText(i, i * (bw + gap) + bw / 2, h - 1);
   }
 }
 
 /* ---------- state */
 const S = {
-  cpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], zones: [70, 85] },
-  gpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], bwHist: [], bwPeak: 1, zones: [70, 83], present: false },
+  cpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], zones: [70, 85], shown: '' },
+  gpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], bwHist: [], bwPeak: 1, zones: [70, 83], present: false, shown: '' },
 };
 const geigers = { cpu: new Geiger('cpu', -.6, 2600), gpu: new Geiger('gpu', .6, 1300) };
 const cores = new Cores($('cpu-cores'));
+const deck = $('deck');
+let lastData = null;
 
 const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '—' : Number(v).toFixed(d);
 const unit = (v, u, d = 0) => v == null ? '—' : `${fmt(v, d)}<small>${u}</small>`;
 const push = (arr, v) => { arr.push(v); if (arr.length > 120) arr.shift(); };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+/* DOM writes only when the text actually changes. */
+const written = new Map();
+function put(id, value, html) {
+  if (written.get(id) === value) return;
+  written.set(id, value);
+  if (html) $(id).innerHTML = value; else $(id).textContent = value;
+}
+/* Meters scale instead of changing width, so their animation never triggers layout. */
+function putWidth(id, frac) {
+  const v = `scaleX(${Math.round(clamp(frac) * 1000) / 1000})`;
+  if (written.get(id) === v) return;
+  written.set(id, v); $(id).style.transform = v;
+}
+
+/* New data: update targets and history now; the DOM only while the page is visible. */
 function ingest(d) {
+  lastData = d;
   const c = d.cpu;
   if (c) {
-    $('cpu-name').textContent = c.name;
-    $('cpu-name').title = c.name;
-    $('cpu-sub').textContent = c.cores ? `${c.cores} cores · ${c.threads} threads` : `${c.threads} threads`;
     const u = (c.util ?? 0) / 100;
-    S.cpu.load.t = u; S.cpu.tempC = c.temp; S.cpu.temp.t = c.temp == null ? 0 : (c.temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
+    S.cpu.load.t = u; S.cpu.tempC = c.temp; S.cpu.temp.t = c.temp == null ? 0 : tempNorm(c.temp);
     geigers.cpu.u = u;
-    $('cpu-clock').innerHTML = c.freq_mhz ? unit(c.freq_mhz / 1000, 'GHz', 2) : '—';
-    $('cpu-power').innerHTML = unit(c.power_w, 'W', 0);
-    $('cpu-loadavg').textContent = c.load ? c.load.map(x => x.toFixed(1)).join(' ') : '—';
+    if (c.per_core && c.per_core.length) cores.set(c.per_core);
+    push(S.cpu.hist, c.util ?? 0);
+  }
+  const g = (d.gpus || []).find(x => !x.error);
+  S.gpu.present = !!g;
+  if (g) {
+    const u = (g.util ?? 0) / 100, mu = (g.mem_util ?? 0) / 100;
+    S.gpu.load.t = u; S.gpu.tempC = g.temp; S.gpu.temp.t = g.temp == null ? 0 : tempNorm(g.temp);
+    geigers.gpu.u = Math.max(u, mu * .8);
+    push(S.gpu.hist, g.util ?? 0);
+    if (g.bw_gbps != null) S.gpu.bwPeak = g.bw_peak_gbps || Math.max(S.gpu.bwPeak, g.bw_gbps);
+    push(S.gpu.bwHist, g.bw_gbps ?? g.mem_util ?? 0);
+  } else geigers.gpu.u = 0;
+  if (!document.hidden) render();
+}
+
+function render() {
+  const d = lastData;
+  if (!d) return;
+  const compact = deck.classList.contains('compact');
+  const c = d.cpu;
+  if (c) {
+    put('cpu-name', c.name); $('cpu-name').title = c.name;
+    put('cpu-sub', c.cores ? `${c.cores} cores · ${c.threads} threads` : `${c.threads} threads`);
+    put('cpu-clock', c.freq_mhz ? unit(c.freq_mhz / 1000, 'GHz', 2) : '—', true);
+    put('cpu-power', unit(c.power_w, 'W', 0), true);
+    put('cpu-loadavg', c.load ? c.load.map(x => x.toFixed(1)).join(' ') : '—');
     const pc = c.per_core || [];
     if (pc.length) {
       let bi = 0; pc.forEach((v, i) => { if (v > pc[bi]) bi = i; });
-      $('cpu-busiest').innerHTML = `#${bi} · ${fmt(pc[bi])}<small>%</small>`;
-      const active = pc.filter(v => v > 50).length;
-      $('cpu-threads-cap').textContent = `${active} of ${pc.length} above 50%`;
-      cores.set(pc);
+      put('cpu-busiest', `#${bi} · ${fmt(pc[bi])}<small>%</small>`, true);
+      put('cpu-threads-cap', `${pc.filter(v => v > 50).length} of ${pc.length} above 50%`);
     }
-    push(S.cpu.hist, c.util ?? 0);
-    $('cpu-peak').textContent = `peak ${Math.round(Math.max(...S.cpu.hist))}%`;
-    drawSpark($('cpu-spark'), S.cpu.hist, 100, ACC.cpu);
-    drawSpark($('cpu-hspark'), S.cpu.hist, 100, ACC.cpu);
-    renderProcs('cpu', c.procs, 'mem_mb', 'No process data.');
+    put('cpu-peak', `peak ${Math.round(Math.max(...S.cpu.hist))}%`);
+    drawSpark($(compact ? 'cpu-hspark' : 'cpu-spark'), S.cpu.hist, 100, 'cpu');
+    renderProcs('cpu', c.procs, 'mem_mb', 'No process data.', compact);
   }
 
   const g = (d.gpus || []).find(x => !x.error);
-  S.gpu.present = !!g;
-  $('gpu-body').style.display = g ? 'contents' : 'none';
-  $('gpu-none').hidden = !!g;
+  if ($('gpu-none').hidden !== !!g) { $('gpu-body').style.display = g ? 'contents' : 'none'; $('gpu-none').hidden = !!g; }
   if (!g) {
-    $('gpu-name').textContent = (d.gpus && d.gpus[0] && d.gpus[0].name) || 'No GPU detected';
-    $('gpu-sub').textContent = '—'; geigers.gpu.u = 0;
+    put('gpu-name', (d.gpus && d.gpus[0] && d.gpus[0].name) || 'No GPU detected');
+    put('gpu-sub', '—');
     return;
   }
-  $('gpu-name').textContent = g.name; $('gpu-name').title = g.name;
+  put('gpu-name', g.name); $('gpu-name').title = g.name;
   const sub = [];
   if (g.vram_total_mb) sub.push(`${Math.round(g.vram_total_mb / 1024)} GB`);
   if (g.bus_width) sub.push(`${g.bus_width}-bit bus`);
   sub.push(g.vendor);
-  $('gpu-sub').textContent = sub.join(' · ');
-  const u = (g.util ?? 0) / 100, mu = (g.mem_util ?? 0) / 100;
-  S.gpu.load.t = u; S.gpu.tempC = g.temp; S.gpu.temp.t = g.temp == null ? 0 : (g.temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
-  geigers.gpu.u = Math.max(u, mu * .8);
-  $('gpu-clock').innerHTML = unit(g.clock_mhz, 'MHz');
-  $('gpu-power').innerHTML = g.power_w == null ? '—' : `${fmt(g.power_w)}${g.power_limit_w ? `<small>/ ${fmt(g.power_limit_w)} W</small>` : '<small>W</small>'}`;
-  $('gpu-fan').innerHTML = unit(g.fan_pct, '%');
+  put('gpu-sub', sub.join(' · '));
+  put('gpu-clock', unit(g.clock_mhz, 'MHz'), true);
+  put('gpu-power', g.power_w == null ? '—' : `${fmt(g.power_w)}${g.power_limit_w ? `<small>/ ${fmt(g.power_limit_w)} W</small>` : '<small>W</small>'}`, true);
+  put('gpu-fan', unit(g.fan_pct, '%'), true);
   if (g.vram_total_mb) {
-    $('gpu-vram').innerHTML = `${fmt(g.vram_used_mb / 1024, 1)}<small>/ ${fmt(g.vram_total_mb / 1024, 1)} GB</small>`;
-    $('gpu-vram-bar').style.width = `${clamp(g.vram_used_mb / g.vram_total_mb) * 100}%`;
+    put('gpu-vram', `${fmt(g.vram_used_mb / 1024, 1)}<small>/ ${fmt(g.vram_total_mb / 1024, 1)} GB</small>`, true);
+    putWidth('gpu-vram-bar', g.vram_used_mb / g.vram_total_mb);
   }
-  push(S.gpu.hist, g.util ?? 0);
-  $('gpu-peak').textContent = `peak ${Math.round(Math.max(...S.gpu.hist))}%`;
-  drawSpark($('gpu-spark'), S.gpu.hist, 100, ACC.gpu);
-  drawSpark($('gpu-hspark'), S.gpu.hist, 100, ACC.gpu);
+  put('gpu-peak', `peak ${Math.round(Math.max(...S.gpu.hist))}%`);
+  drawSpark($(compact ? 'gpu-hspark' : 'gpu-spark'), S.gpu.hist, 100, 'gpu');
+  if (compact) return;
 
   if (g.bw_gbps != null) {
-    $('gpu-bw').textContent = g.bw_gbps >= 100 ? fmt(g.bw_gbps) : fmt(g.bw_gbps, 1);
-    S.gpu.bwPeak = g.bw_peak_gbps || Math.max(S.gpu.bwPeak, g.bw_gbps);
-    $('gpu-bw-bar').style.width = `${clamp(g.bw_gbps / S.gpu.bwPeak) * 100}%`;
-    $('gpu-bw-peak').textContent = g.bw_peak_gbps ? `peak ${fmt(g.bw_peak_gbps)} GB/s` : '';
-    push(S.gpu.bwHist, g.bw_gbps);
-    $('gpu-bw-note').textContent = 'Estimated from memory-controller busy time';
+    put('gpu-bw', g.bw_gbps >= 100 ? fmt(g.bw_gbps) : fmt(g.bw_gbps, 1));
+    putWidth('gpu-bw-bar', g.bw_gbps / S.gpu.bwPeak);
+    put('gpu-bw-peak', g.bw_peak_gbps ? `peak ${fmt(g.bw_peak_gbps)} GB/s` : '');
+    put('gpu-bw-note', 'Estimated from memory-controller busy time');
   } else {
-    $('gpu-bw').textContent = g.mem_util == null ? '—' : `${fmt(g.mem_util)}%`;
-    $('gpu-bw-bar').style.width = `${mu * 100}%`;
-    $('gpu-bw-peak').textContent = '';
-    push(S.gpu.bwHist, (g.mem_util ?? 0));
-    $('gpu-bw-note').textContent = 'Memory-controller busy. Pass --amd-peak-bw for GB/s';
+    put('gpu-bw', g.mem_util == null ? '—' : `${fmt(g.mem_util)}%`);
+    putWidth('gpu-bw-bar', (g.mem_util ?? 0) / 100);
+    put('gpu-bw-peak', '');
+    put('gpu-bw-note', 'Memory-controller busy. Pass --amd-peak-bw for GB/s');
   }
-  drawSpark($('gpu-bw-spark'), S.gpu.bwHist, g.bw_gbps != null ? S.gpu.bwPeak : 100, ACC.gpu);
-
-  renderProcs('gpu', g.procs, 'vram_mb', 'No processes are using the GPU.');
+  drawSpark($('gpu-bw-spark'), S.gpu.bwHist, g.bw_gbps != null ? S.gpu.bwPeak : 100, 'gpu');
+  renderProcs('gpu', g.procs, 'vram_mb', 'No processes are using the GPU.', compact);
 }
 
 const mem = mb => mb >= 1024 ? `${fmt(mb / 1024, 1)} GB` : `${fmt(mb)} MB`;
-function renderProcs(key, procs, memKey, emptyText) {
+function renderProcs(key, procs, memKey, emptyText, compact) {
   procs = (procs || []).slice(0, 10);
   const top = procs[0];
-  $(`${key}-proc-cap`).textContent = top ? `${top.name} · ${fmt(top.util)}%` : '';
-  $(`${key}-procs`).innerHTML = procs.length ? procs.map(p => `
+  put(`${key}-proc-cap`, top ? `${top.name} · ${fmt(top.util)}%` : '');
+  if (compact || !$(`${key}-fold`).open) return;   // folded: only the summary line is visible
+  put(`${key}-procs`, procs.length ? procs.map(p => `
     <tr><td class="name" title="${esc(p.name)}">${esc(p.name)}</td>
     <td class="n">${p.pid}</td>
     <td class="n u"><span>${fmt(p.util)}%</span><i class="b" style="width:${clamp(p.util / 100) * 100}%"></i></td>
     <td class="n">${mem(p[memKey] || 0)}</td></tr>`).join('')
-    : `<tr class="empty"><td colspan="4">${emptyText}</td></tr>`;
+    : `<tr class="empty"><td colspan="4">${emptyText}</td></tr>`, true);
 }
 
-/* ---------- animation loop */
+/* ---------- animation loop: 30 fps, and each part redraws only when something changed */
+const FRAME_MS = 1000 / 30;
 let last = performance.now();
 function frame(t) {
-  const dt = Math.min(.05, (t - last) / 1000), now = t / 1000; last = t;
+  requestAnimationFrame(frame);
+  if (t - last < FRAME_MS - 2) return;
+  const dt = Math.min(.1, (t - last) / 1000), now = t / 1000; last = t;
   for (const k of ['cpu', 'gpu']) {
     const s = S[k];
     s.load.step(dt); s.temp.step(dt);
     geigers[k].step(dt, now);
     if (k === 'gpu' && !s.present) continue;
-    drawDial($(`${k}-dial`), s.load.x, s.temp.x, s.tempC, ACC[k], s.zones);
+    const canvas = $(`${k}-dial`);
+    const key = `${s.load.x.toFixed(4)}|${s.temp.x.toFixed(4)}|${s.tempC == null ? '' : Math.round(s.tempC)}`;
+    if (key !== s.shown || stale.has(canvas)) { s.shown = key; stale.delete(canvas); drawDial(canvas, s.load.x, s.temp.x, s.tempC, ACC[k], s.zones); }
     geigers[k].draw(now);
   }
-  if (!document.getElementById('deck').classList.contains('compact')) { cores.step(dt); cores.draw(); }
-  requestAnimationFrame(frame);
+  if (!deck.classList.contains('compact')) { cores.step(dt); cores.draw(); }
 }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { last = performance.now(); render(); } });
 
 /* ---------- data sources */
 function setSource(state, text) { $('source').dataset.state = state; $('source-text').textContent = text; }
@@ -1139,13 +1249,14 @@ function setCompact(on) {
   $('deck').classList.toggle('compact', on);
   $('compact').setAttribute('aria-pressed', on);
   try { localStorage.setItem('pcmeter.compact', on ? '1' : '0'); } catch {}
+  render();
 }
 $('compact').addEventListener('click', () => setCompact(!$('deck').classList.contains('compact')));
 try { if (localStorage.getItem('pcmeter.compact') === '1') setCompact(true); } catch {}
 for (const key of ['cpu', 'gpu']) {
   const fold = $(`${key}-fold`), store = `pcmeter.fold.${key}`;
   try { fold.open = localStorage.getItem(store) === '1'; } catch {}
-  fold.addEventListener('toggle', () => { try { localStorage.setItem(store, fold.open ? '1' : '0'); } catch {} });
+  fold.addEventListener('toggle', () => { render(); try { localStorage.setItem(store, fold.open ? '1' : '0'); } catch {} });
 }
 
 const SKINS = [...$('skin').options].map(o => o.value);
@@ -1154,6 +1265,9 @@ function setSkin(name) {
   document.documentElement.dataset.skin = name;
   $('skin').value = name;
   readTheme();
+  document.querySelectorAll('canvas').forEach(c => stale.add(c));
+  S.cpu.shown = S.gpu.shown = '';
+  render();
   try { localStorage.setItem('pcmeter.skin', name); } catch {}
 }
 $('skin').addEventListener('change', e => setSkin(e.target.value));

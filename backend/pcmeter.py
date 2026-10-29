@@ -30,6 +30,8 @@ except ImportError:
     pynvml = None
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+PAGE_SIZE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 
 
 def _read(path, cast=str):
@@ -70,6 +72,26 @@ def cpu_model():
 # Preferred sensor chips and labels, most accurate first.
 TEMP_CHIPS = ("k10temp", "zenpower", "coretemp", "cpu_thermal", "soc_thermal", "acpitz")
 TEMP_LABELS = ("Tdie", "Tctl", "Package id 0")
+
+
+def find_cpu_temp_file():
+    """The hwmon input for the best CPU sensor, found once so each sample is a single file read."""
+    chips = {}
+    for hw in Path("/sys/class/hwmon").glob("hwmon*"):
+        name = _read(hw / "name")
+        if name:
+            chips.setdefault(name, hw)
+    for chip in TEMP_CHIPS:
+        hw = chips.get(chip)
+        if not hw:
+            continue
+        labels = {_read(f): f for f in hw.glob("temp*_label")}
+        for label in TEMP_LABELS:
+            if label in labels:
+                return Path(str(labels[label]).replace("_label", "_input"))
+        if (hw / "temp1_input").exists():
+            return hw / "temp1_input"
+    return None
 
 
 def cpu_temp():
@@ -122,11 +144,58 @@ class CpuSampler:
         self.cores = psutil.cpu_count(logical=False) or 0
         self.threads = psutil.cpu_count(logical=True) or 0
         self.rapl = Rapl()
+        self.temp_file = find_cpu_temp_file() if platform.system() == "Linux" else None
         self.procs = []
         self.next_proc_scan = 0.0
+        self.prev_ticks, self.last_scan = {}, None
         psutil.cpu_percent(percpu=True)  # prime the counters
 
     def _scan_procs(self):
+        if platform.system() == "Linux":
+            self._scan_procs_linux()
+        else:
+            self._scan_procs_psutil()
+
+    def _scan_procs_linux(self):
+        """One read of /proc/<pid>/stat per process: name, CPU ticks and RSS are all in it."""
+        now = time.monotonic()
+        dt = now - self.last_scan if self.last_scan else None
+        ticks_now, found = {}, []
+        for entry in os.scandir("/proc"):
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", "rb") as f:
+                    data = f.read()
+            except OSError:
+                continue
+            close = data.rfind(b")")
+            fields = data[close + 2:].split()
+            pid = int(entry.name)
+            ticks = int(fields[11]) + int(fields[12])   # utime + stime
+            ticks_now[pid] = ticks
+            if dt and pid in self.prev_ticks:
+                found.append({
+                    "pid": pid,
+                    "name": data[data.find(b"(") + 1:close].decode(errors="replace"),
+                    "util": (ticks - self.prev_ticks[pid]) / CLK_TCK / dt * 100 / max(1, self.threads),
+                    "mem_mb": int(fields[21]) * PAGE_SIZE / 2**20,
+                })
+        self.prev_ticks, self.last_scan = ticks_now, now
+        found.sort(key=lambda p: (p["util"], p["mem_mb"]), reverse=True)
+        self.procs = found[:10]
+        for p in self.procs:
+            if len(p["name"]) == 15:   # the kernel truncates names; take the full one from cmdline
+                try:
+                    with open(f"/proc/{p['pid']}/cmdline", "rb") as f:
+                        argv0 = f.read().split(b"\0", 1)[0].split(b" ", 1)[0]
+                    full = os.path.basename(argv0.decode(errors="replace"))
+                    if full.startswith(p["name"]):   # some programs rewrite argv; keep only a real match
+                        p["name"] = full
+                except OSError:
+                    pass
+
+    def _scan_procs_psutil(self):
         # process_iter caches Process objects, so cpu_percent measures since the previous scan.
         found = []
         for p in psutil.process_iter(["pid", "name", "cpu_percent", "memory_info"]):
@@ -160,7 +229,7 @@ class CpuSampler:
             "threads": self.threads,
             "util": sum(per_core) / max(1, len(per_core)),
             "per_core": per_core,
-            "temp": cpu_temp(),
+            "temp": _read(self.temp_file, int) / 1000 if self.temp_file else cpu_temp(),
             "freq_mhz": freq.current if freq else None,
             "power_w": self.rapl.watts(),
             "load": load,
@@ -255,13 +324,15 @@ class DrmClients:
         self.pdev = pdev
         self.prev = {}  # (pid, client_id) -> (busy_ns, wall_ns)
 
-    def scan(self):
+    def scan(self, full=True):
         wall = time.monotonic_ns()
         per_pid = {}
         seen = {}
-        for pid_dir in Path("/proc").iterdir():
-            if not pid_dir.name.isdigit():
-                continue
+        if full:
+            pid_dirs = [d for d in Path("/proc").iterdir() if d.name.isdigit()]
+        else:
+            pid_dirs = [Path(f"/proc/{pid}") for pid in {pid for pid, _ in self.prev}]
+        for pid_dir in pid_dirs:
             try:
                 fds = list((pid_dir / "fdinfo").iterdir())
             except OSError:
@@ -307,6 +378,7 @@ class AmdGpu:
         self.clients = DrmClients("amdgpu", self.dev.resolve().name)
         self.procs = []
         self.next_proc_scan = 0.0
+        self.next_full_scan = 0.0
 
     def _hw(self, name, scale):
         if not self.hwmon:
@@ -317,8 +389,11 @@ class AmdGpu:
     def sample(self):
         now = time.monotonic()
         if now >= self.next_proc_scan:
-            self.procs = self.clients.scan()
+            full = now >= self.next_full_scan
+            self.procs = self.clients.scan(full)
             self.next_proc_scan = now + 2.0
+            if full:
+                self.next_full_scan = now + 10.0
         mem_util = _read(self.dev / "mem_busy_percent", int)
         used = _read(self.dev / "mem_info_vram_used", int)
         total = _read(self.dev / "mem_info_vram_total", int)
@@ -374,9 +449,20 @@ class Telemetry:
         self.host = socket.gethostname()
         self.latest = None
         self.cond = threading.Condition()
+        self.clients = 0
+        self.watched = threading.Event()   # set while at least one stream is open
+
+    def attach(self, delta):
+        with self.cond:
+            self.clients += delta
+            if self.clients > 0:
+                self.watched.set()
+            else:
+                self.watched.clear()
 
     def run(self):
         while True:
+            self.watched.wait()   # no window open: sleep instead of sampling
             started = time.monotonic()
             gpus = []
             for gpu in self.gpus:
@@ -415,8 +501,14 @@ def make_handler(telemetry):
             if path == "/stream":
                 self._stream()
             elif path == "/snapshot":
-                with telemetry.cond:
-                    self._send((telemetry.latest or "{}").encode(), "application/json")
+                telemetry.attach(1)
+                try:
+                    with telemetry.cond:
+                        telemetry.cond.wait(timeout=2 * telemetry.interval)
+                        data = telemetry.latest or "{}"
+                finally:
+                    telemetry.attach(-1)
+                self._send(data.encode(), "application/json")
             elif path in ("/", "/index.html"):
                 self._send((WEB_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
             else:
@@ -429,6 +521,7 @@ def make_handler(telemetry):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             last = None
+            telemetry.attach(1)
             try:
                 while True:
                     with telemetry.cond:
@@ -442,6 +535,8 @@ def make_handler(telemetry):
                     last = data
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            finally:
+                telemetry.attach(-1)
 
     return Handler
 
