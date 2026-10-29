@@ -36,7 +36,7 @@ try:
 except ImportError:
     pynvml = None
 
-__version__ = "0.2.0"
+__version__ = "1.0.0"
 # A PyInstaller build unpacks the web UI next to the code in sys._MEIPASS.
 WEB_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "web"
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
