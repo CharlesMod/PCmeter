@@ -1,0 +1,1167 @@
+<title>PCmeter</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Martian+Mono:wdth,wght@75..112.5,300..600&family=Onest:wght@400;500;600&family=Ubuntu:wght@400;500&family=Ubuntu+Mono&display=swap">
+<style>
+/* Layout: two instrument cards over a wallpaper. Each leads with a dual dial (load + inset
+   temperature, after the Vista meter gadget), then an activity counter, then detail.
+   Skins: every color, face, radius and glass value below is a token; the canvases read them too. */
+:root, [data-skin="glass"] {
+  --wallpaper:
+    radial-gradient(55% 45% at 12% 8%, #1b2152, transparent 70%),
+    radial-gradient(45% 45% at 78% 12%, #0b3640, transparent 70%),
+    radial-gradient(50% 50% at 92% 92%, #3a2015, transparent 70%),
+    #080b12;
+  --ink: #e8edf5;
+  --ink-2: rgba(232, 237, 245, .64);
+  --ink-3: rgba(232, 237, 245, .40);
+  --fg: 255, 255, 255;
+  --hair: rgba(255, 255, 255, .08);
+  --edge: rgba(255, 255, 255, .14);
+  --well: rgba(4, 7, 12, .32);
+  --cpu: #8fd6ff;
+  --gpu: #ffb067;
+  --cool: #5fb4ff;
+  --warn: #ffcf5c;
+  --hot: #ff6a6a;
+  --ok: #72e3a6;
+  --f-ui: "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-num: "Martian Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --card-bg: linear-gradient(170deg, rgba(255,255,255,.10), rgba(255,255,255,.035) 45%, rgba(255,255,255,.05));
+  --card-filter: blur(32px) saturate(170%);
+  --card-shadow: inset 0 1px 0 rgba(255,255,255,.20), inset 0 -1px 0 rgba(0,0,0,.30), 0 30px 60px -28px rgba(0,0,0,.75);
+  --card-glow: 13%;
+  --radius: 24px;
+  --needle: #ffffff;
+  --disc: rgba(6, 9, 15, .78);
+  --face-hi: rgba(255, 255, 255, .07);
+  --face-lo: rgba(0, 0, 0, .22);
+  --glow: 1;
+  color-scheme: dark;
+}
+[data-skin="matrix"] {
+  --wallpaper:
+    repeating-linear-gradient(0deg, rgba(0,255,90,.035) 0 1px, transparent 1px 3px),
+    radial-gradient(70% 50% at 50% 0%, #06301a, transparent 70%),
+    #010603;
+  --ink: #c9ffd8;
+  --ink-2: rgba(110, 255, 150, .72);
+  --ink-3: rgba(70, 220, 115, .48);
+  --fg: 90, 255, 140;
+  --hair: rgba(57, 255, 106, .14);
+  --edge: rgba(57, 255, 106, .38);
+  --well: rgba(0, 22, 8, .7);
+  --cpu: #39ff6a;
+  --gpu: #00ffd0;
+  --cool: #00e5ff;
+  --warn: #e6ff3a;
+  --hot: #ff3a5c;
+  --ok: #39ff6a;
+  --f-ui: "Martian Mono", ui-monospace, Menlo, Consolas, monospace;
+  --f-num: "Martian Mono", ui-monospace, Menlo, Consolas, monospace;
+  --card-bg: rgba(0, 14, 5, .86);
+  --card-filter: none;
+  --card-shadow: 0 0 0 1px rgba(57,255,106,.06), 0 0 34px -8px rgba(57,255,106,.35);
+  --card-glow: 8%;
+  --radius: 4px;
+  --needle: #e4ffe9;
+  --disc: rgba(0, 10, 3, .92);
+  --face-hi: rgba(57, 255, 106, .06);
+  --face-lo: rgba(0, 0, 0, .3);
+  --glow: 1.4;
+  color-scheme: dark;
+}
+[data-skin="hive"] {
+  --wallpaper:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 66L0 50L0 16L28 0L56 16L56 50L28 66L28 100' fill='none' stroke='%23ffc533' stroke-opacity='.07'/%3E%3C/svg%3E"),
+    radial-gradient(60% 50% at 15% 0%, rgba(255,197,51,.16), transparent 70%),
+    radial-gradient(50% 50% at 100% 100%, rgba(255,120,30,.12), transparent 70%),
+    #121317;
+  --ink: #f4efe3;
+  --ink-2: rgba(244, 239, 227, .64);
+  --ink-3: rgba(244, 239, 227, .40);
+  --fg: 255, 236, 200;
+  --hair: rgba(255, 197, 51, .10);
+  --edge: rgba(255, 197, 51, .24);
+  --well: rgba(0, 0, 0, .35);
+  --cpu: #ffc533;
+  --gpu: #ff8a2a;
+  --cool: #4fb3ff;
+  --warn: #ffd75e;
+  --hot: #ff5b4a;
+  --ok: #8bd46e;
+  --card-bg: linear-gradient(170deg, rgba(44,39,29,.86), rgba(22,22,26,.88));
+  --card-filter: blur(12px);
+  --card-shadow: inset 0 1px 0 rgba(255,220,140,.12), 0 24px 50px -24px rgba(0,0,0,.8);
+  --card-glow: 10%;
+  --radius: 14px;
+  --needle: #fff6dc;
+  --disc: rgba(12, 12, 14, .88);
+  color-scheme: dark;
+}
+[data-skin="windows"] {
+  --wallpaper:
+    radial-gradient(55% 60% at 72% 42%, #2a63c9, transparent 70%),
+    radial-gradient(45% 50% at 28% 85%, #0e3a8a, transparent 70%),
+    radial-gradient(40% 40% at 90% 90%, #6a3fb5, transparent 70%),
+    #0a1430;
+  --ink: #ffffff;
+  --ink-2: rgba(255, 255, 255, .79);
+  --ink-3: rgba(255, 255, 255, .54);
+  --hair: rgba(255, 255, 255, .084);
+  --edge: rgba(255, 255, 255, .10);
+  --well: rgba(0, 0, 0, .26);
+  --cpu: #60cdff;
+  --gpu: #c4a7ff;
+  --cool: #4fa8ff;
+  --f-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --f-num: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+  --card-bg: rgba(32, 32, 32, .72);
+  --card-filter: blur(30px) saturate(125%);
+  --card-shadow: inset 0 1px 0 rgba(255,255,255,.07), 0 8px 16px rgba(0,0,0,.26);
+  --card-glow: 0%;
+  --radius: 8px;
+  --disc: rgba(28, 28, 28, .94);
+  --face-hi: rgba(255, 255, 255, .04);
+  --face-lo: rgba(0, 0, 0, .18);
+  --glow: .6;
+  color-scheme: dark;
+}
+[data-skin="mac"] {
+  --wallpaper:
+    radial-gradient(60% 55% at 15% 10%, #ffd3b0, transparent 70%),
+    radial-gradient(55% 55% at 85% 20%, #e3a6d8, transparent 70%),
+    radial-gradient(70% 60% at 60% 100%, #6f86e6, transparent 70%),
+    #a9a3e6;
+  --ink: #1d1d1f;
+  --ink-2: rgba(29, 29, 31, .64);
+  --ink-3: rgba(29, 29, 31, .44);
+  --fg: 0, 0, 0;
+  --hair: rgba(0, 0, 0, .08);
+  --edge: rgba(255, 255, 255, .6);
+  --well: rgba(255, 255, 255, .38);
+  --cpu: #007aff;
+  --gpu: #ff9500;
+  --cool: #0a84ff;
+  --warn: #c77700;
+  --hot: #ff3b30;
+  --ok: #1f9d48;
+  --f-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --f-num: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --card-bg: rgba(255, 255, 255, .55);
+  --card-filter: blur(40px) saturate(180%);
+  --card-shadow: inset 0 1px 0 rgba(255,255,255,.75), 0 22px 44px -20px rgba(40,30,80,.4);
+  --card-glow: 0%;
+  --radius: 22px;
+  --needle: #1d1d1f;
+  --disc: rgba(255, 255, 255, .88);
+  --face-hi: rgba(255, 255, 255, .55);
+  --face-lo: rgba(0, 0, 0, .035);
+  --glow: .5;
+  color-scheme: light;
+}
+[data-skin="linux"] {
+  --wallpaper:
+    radial-gradient(70% 60% at 88% 100%, rgba(233,84,32,.55), transparent 70%),
+    radial-gradient(70% 70% at 0% 0%, #5e2750, transparent 70%),
+    linear-gradient(160deg, #2c001e, #3b0a2f 60%, #4a1530);
+  --ink: #f7f7f7;
+  --ink-2: rgba(247, 247, 247, .66);
+  --ink-3: rgba(247, 247, 247, .42);
+  --hair: rgba(255, 255, 255, .08);
+  --edge: rgba(255, 255, 255, .10);
+  --well: rgba(0, 0, 0, .3);
+  --cpu: #e95420;
+  --gpu: #d986cf;
+  --cool: #4ea5f2;
+  --f-ui: "Ubuntu", "Cantarell", system-ui, sans-serif;
+  --f-num: "Ubuntu Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+  --card-bg: rgba(44, 44, 44, .94);
+  --card-filter: none;
+  --card-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 12px 30px -12px rgba(0,0,0,.6);
+  --card-glow: 0%;
+  --radius: 12px;
+  --disc: #1f1f1f;
+  --face-hi: rgba(255, 255, 255, .04);
+  --face-lo: rgba(0, 0, 0, .2);
+  --glow: .7;
+  color-scheme: dark;
+}
+[data-skin="dark"] {
+  --wallpaper: #0d0e10;
+  --ink: #ececee;
+  --ink-2: rgba(236, 236, 238, .6);
+  --ink-3: rgba(236, 236, 238, .38);
+  --hair: rgba(255, 255, 255, .07);
+  --edge: rgba(255, 255, 255, .08);
+  --well: rgba(255, 255, 255, .025);
+  --cpu: #9cc4ff;
+  --gpu: #ffbf8f;
+  --cool: #6aa8ff;
+  --card-bg: #16171a;
+  --card-filter: none;
+  --card-shadow: none;
+  --card-glow: 0%;
+  --radius: 16px;
+  --needle: #f2f2f2;
+  --disc: #101113;
+  --face-hi: rgba(255, 255, 255, .03);
+  --face-lo: rgba(0, 0, 0, .15);
+  --glow: .4;
+  color-scheme: dark;
+}
+[data-skin="white"] {
+  --wallpaper: #f3f4f6;
+  --ink: #111318;
+  --ink-2: rgba(17, 19, 24, .62);
+  --ink-3: rgba(17, 19, 24, .42);
+  --fg: 17, 19, 24;
+  --hair: rgba(17, 19, 24, .08);
+  --edge: rgba(17, 19, 24, .08);
+  --well: rgba(17, 19, 24, .035);
+  --cpu: #0a66ff;
+  --gpu: #f2541b;
+  --cool: #1a7cff;
+  --warn: #b77b00;
+  --hot: #dc2f2f;
+  --ok: #159a52;
+  --card-bg: #ffffff;
+  --card-filter: none;
+  --card-shadow: 0 1px 2px rgba(17,19,24,.06), 0 12px 32px -16px rgba(17,19,24,.2);
+  --card-glow: 0%;
+  --radius: 18px;
+  --needle: #111318;
+  --disc: #ffffff;
+  --face-hi: rgba(17, 19, 24, .015);
+  --face-lo: rgba(17, 19, 24, .04);
+  --glow: .3;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--wallpaper);
+  background-attachment: fixed;
+  color: var(--ink);
+  font-family: var(--f-ui);
+  font-size: 14px;
+  min-height: 100vh;
+}
+body.widget { background: transparent; }
+
+.deck {
+  max-width: 880px;
+  margin: 0 auto;
+  padding-block: 24px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 14px;
+}
+
+/* ---- top bar */
+.bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mark {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 112.5;
+  font-weight: 300;
+  font-size: 15px;
+  letter-spacing: .22em;
+  margin: 0;
+}
+.chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12px; color: var(--ink-2);
+  padding: 5px 10px 5px 9px;
+  border: 1px solid var(--hair); border-radius: 999px;
+  background: var(--well);
+}
+.chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+.chip[data-state="live"] i { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.chip[data-state="lost"] i { background: var(--hot); box-shadow: 0 0 8px var(--hot); }
+.tools { margin-left: auto; display: flex; gap: 8px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 32px; padding: 0 12px;
+  font: 500 12px var(--f-ui); color: var(--ink-2);
+  background: linear-gradient(180deg, rgba(var(--fg),.09), rgba(var(--fg),.03));
+  border: 1px solid var(--edge); border-radius: min(999px, calc(var(--radius) + 6px));
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+.btn:hover { color: var(--ink); }
+.btn[aria-pressed="true"] { color: var(--ink); border-color: rgba(var(--fg),.3); }
+.btn:focus-visible, .btn:focus-within { outline: 2px solid var(--cpu); outline-offset: 2px; }
+.skin-pick { position: relative; padding-right: 10px; }
+.skin-pick select {
+  appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit;
+  font: inherit; cursor: pointer; padding: 0 14px 0 0; outline: none;
+}
+.skin-pick::after {
+  content: ""; position: absolute; right: 11px; top: 50%; width: 5px; height: 5px; margin-top: -4px;
+  border: solid currentColor; border-width: 0 1.4px 1.4px 0; transform: rotate(45deg); pointer-events: none;
+}
+.btn svg { width: 15px; height: 15px; }
+
+/* ---- cards */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.card {
+  --acc: var(--cpu);
+  position: relative;
+  container-type: inline-size;
+  display: grid;
+  gap: 14px;
+  padding: 16px 16px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--edge);
+  background: var(--card-bg);
+  -webkit-backdrop-filter: var(--card-filter);
+  backdrop-filter: var(--card-filter);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+  min-width: 0;
+}
+.card.gpu { --acc: var(--gpu); }
+.card::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(70% 45% at 22% 26%, color-mix(in srgb, var(--acc) var(--card-glow), transparent), transparent 70%);
+}
+.card > * { position: relative; }
+
+.head { display: flex; align-items: flex-start; gap: 12px; }
+.head .id { min-width: 0; flex: 1; }
+.head-spark { display: none; flex: 1 1 0; min-width: 40px; height: 40px; align-self: center; }
+.compact .head .id { flex: 0 1 auto; max-width: 52%; }
+.compact .head-spark { display: block; }
+.eyebrow {
+  font: 600 10.5px var(--f-ui); letter-spacing: .16em; text-transform: uppercase;
+  color: var(--acc);
+}
+.head h2 {
+  margin: 3px 0 2px; font-size: 15px; font-weight: 500; line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sub { font-size: 12px; color: var(--ink-2); }
+
+/* activity LED: a glass dome that flashes per count */
+.led-wrap { display: grid; justify-items: center; gap: 4px; padding-top: 2px; }
+.led {
+  position: relative; width: 13px; height: 13px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 60%, #1b2230, #0b0f16);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.08);
+}
+.led i {
+  position: absolute; inset: 1px; border-radius: 50%; opacity: 0;
+  background: radial-gradient(circle at 50% 55%, #fff, var(--acc) 45%, color-mix(in srgb, var(--acc) 60%, #000));
+  box-shadow: 0 0 10px 2px var(--acc), 0 0 22px 4px color-mix(in srgb, var(--acc) 45%, transparent);
+}
+.led::after {
+  content: ""; position: absolute; left: 3px; top: 2px; width: 5px; height: 3px; border-radius: 50%;
+  background: rgba(255,255,255,.55); filter: blur(.4px);
+}
+.led-wrap span { font: 600 8.5px var(--f-ui); letter-spacing: .14em; color: var(--ink-3); }
+
+/* dial + readouts */
+.instrument { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 16px; align-items: center; }
+.dial { width: 176px; height: 176px; display: block; }
+.readouts { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; }
+.row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 7px 0; border-bottom: 1px solid var(--hair);
+}
+.row dt { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; flex: none; }
+.row dd { min-width: 0; }
+.row dd {
+  margin: 0; font: 400 13.5px var(--f-num); font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.row dd small, .num small { font-family: var(--f-ui); font-size: 10.5px; color: var(--ink-3); margin-left: 3px; }
+.spark-wrap { padding-top: 8px; display: grid; gap: 3px; }
+.spark-wrap .cap { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); letter-spacing: .04em; }
+.spark { width: 100%; height: 38px; display: block; }
+
+/* geiger strip */
+.geiger {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  padding: 6px 10px; border-radius: 12px;
+  background: var(--well); border: 1px solid var(--hair);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,.35);
+}
+.geiger .lbl { font: 600 9.5px var(--f-ui); letter-spacing: .14em; color: var(--ink-3); text-transform: uppercase; writing-mode: vertical-rl; transform: rotate(180deg); }
+.geiger canvas { width: 100%; height: 34px; display: block; }
+.cpm { text-align: right; line-height: 1.05; }
+.cpm b { display: block; font: 400 14px var(--f-num); font-variant-numeric: tabular-nums; }
+.cpm span { font-size: 9.5px; letter-spacing: .12em; color: var(--ink-3); }
+
+/* section heads */
+.sect { display: grid; gap: 8px; }
+.sect-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.sect-head h3 { margin: 0; font: 600 10.5px var(--f-ui); letter-spacing: .16em; text-transform: uppercase; color: var(--ink-2); }
+.sect-head span { font: 400 11px var(--f-num); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.cores { width: 100%; height: 78px; display: block; }
+
+/* bandwidth */
+.bw-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.bw-val { font: 300 26px var(--f-num); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.bw-val small { font: 500 12px var(--f-ui); color: var(--ink-2); margin-left: 4px; letter-spacing: 0; }
+.meter { height: 6px; border-radius: 6px; background: rgba(var(--fg),.08); overflow: hidden; }
+.meter i {
+  display: block; height: 100%; width: 0; border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--acc) 45%, transparent), var(--acc));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--acc) 60%, transparent);
+  transition: width .45s cubic-bezier(.2,.7,.3,1);
+}
+.meter.thin { height: 3px; margin-top: 5px; }
+.foot { display: flex; justify-content: space-between; gap: 10px; font-size: 10.5px; color: var(--ink-3); }
+
+/* processes */
+.procs { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12.5px; }
+.procs th {
+  font: 600 9.5px var(--f-ui); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
+  text-align: right; padding: 0 0 6px; border-bottom: 1px solid var(--hair);
+}
+.procs th:first-child, .procs td:first-child { text-align: left; }
+.procs td { padding: 5px 0; border-bottom: 1px solid var(--hair); text-align: right; }
+.procs tr:last-child td { border-bottom: 0; }
+.procs td.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
+.procs td.n { font: 400 11.5px var(--f-num); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.procs td.u { position: relative; }
+.procs td.u .b {
+  position: absolute; right: 0; bottom: 2px; height: 2px; border-radius: 2px;
+  background: var(--acc); box-shadow: 0 0 6px var(--acc);
+}
+.procs td.u span { color: var(--ink); }
+.procs .empty td { color: var(--ink-3); text-align: left; font-size: 12px; }
+
+/* fold-out process lists: the caret turns, the summary keeps the leader visible while closed */
+.fold > summary {
+  list-style: none; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 6px 8px; margin: -6px -8px; border-radius: 10px;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary:hover { background: rgba(var(--fg),.05); }
+.fold > summary:focus-visible { outline: 2px solid var(--acc); outline-offset: 0; }
+.fold h3 {
+  margin: 0; display: flex; align-items: center; gap: 7px;
+  font: 600 10.5px var(--f-ui); letter-spacing: .16em; text-transform: uppercase; color: var(--ink-2);
+}
+.fold > summary:hover h3 { color: var(--ink); }
+.fold > summary > span {
+  font: 400 11px var(--f-num); color: var(--ink-3); font-variant-numeric: tabular-nums;
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.caret { width: 10px; height: 10px; flex: none; color: var(--acc); transition: transform .22s cubic-bezier(.2,.7,.3,1); }
+.fold[open] .caret { transform: rotate(90deg); }
+.fold .procs { margin-top: 10px; }
+.fold[open] .procs { animation: unfold .28s cubic-bezier(.2,.7,.3,1); }
+@keyframes unfold { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .caret { transition: none; } .fold[open] .procs { animation: none; } }
+
+.nogpu { font-size: 13px; color: var(--ink-2); line-height: 1.5; padding: 6px 2px; }
+.nogpu code { font-family: var(--f-num); font-size: 11.5px; color: var(--ink); }
+
+/* compact mode keeps the instruments and drops the detail */
+.compact .detail { display: none; }
+.compact .spark-wrap { display: none; }
+
+@container (max-width: 380px) {
+  .instrument { grid-template-columns: 1fr; justify-items: center; }
+  .readouts { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .meter i { transition: none; }
+}
+</style>
+
+<main class="deck" id="deck">
+  <header class="bar">
+    <h1 class="mark">PCmeter</h1>
+    <span class="chip" id="source" data-state="demo"><i></i><span id="source-text">Connecting…</span></span>
+    <div class="tools">
+      <label class="btn skin-pick" title="Change the look">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="5.8"/><path d="M8 2.2v11.6A5.8 5.8 0 0 0 8 2.2z" fill="currentColor" stroke="none"/></svg>
+        <select id="skin" aria-label="Skin">
+          <option value="glass">Glass</option>
+          <option value="matrix">Matrix</option>
+          <option value="hive">Hive</option>
+          <option value="windows">Windows</option>
+          <option value="mac">macOS</option>
+          <option value="linux">Linux</option>
+          <option value="dark">Dark</option>
+          <option value="white">White</option>
+        </select>
+      </label>
+      <button class="btn" id="sound" type="button" aria-pressed="false" title="Play a click for every activity count">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z"/><path id="wave" d="M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4" opacity=".35"/></svg>
+        <span id="sound-text">Clicks off</span>
+      </button>
+      <button class="btn" id="compact" type="button" aria-pressed="false" title="Show only the dials and activity counters">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 5.5h10M3 10.5h10"/></svg>
+        Compact
+      </button>
+    </div>
+  </header>
+
+  <div class="cards">
+    <!-- CPU -->
+    <section class="card cpu" id="cpu-card" aria-label="CPU">
+      <div class="head">
+        <div class="id">
+          <div class="eyebrow">Processor</div>
+          <h2 id="cpu-name">—</h2>
+          <div class="sub" id="cpu-sub">—</div>
+        </div>
+        <canvas class="head-spark" id="cpu-hspark" role="img" aria-label="CPU load over the last 60 seconds"></canvas>
+        <div class="led-wrap" title="Activity: flashes once per count"><div class="led"><i id="cpu-led"></i></div><span>ACT</span></div>
+      </div>
+
+      <div class="instrument">
+        <canvas class="dial" id="cpu-dial" role="img" aria-label="CPU load and temperature dial"></canvas>
+        <dl class="readouts">
+          <div class="row"><dt>Clock</dt><dd id="cpu-clock">—</dd></div>
+          <div class="row"><dt>Package power</dt><dd id="cpu-power">—</dd></div>
+          <div class="row"><dt title="1, 5 and 15 minute load average">Load avg</dt><dd id="cpu-loadavg">—</dd></div>
+          <div class="row"><dt>Busiest thread</dt><dd id="cpu-busiest">—</dd></div>
+          <div class="spark-wrap">
+            <div class="cap"><span>Load, last 60 s</span><span id="cpu-peak">peak —</span></div>
+            <canvas class="spark" id="cpu-spark"></canvas>
+          </div>
+        </dl>
+      </div>
+
+      <div class="geiger">
+        <span class="lbl">Activity</span>
+        <canvas id="cpu-geiger"></canvas>
+        <div class="cpm"><b id="cpu-cpm">0</b><span>CPM</span></div>
+      </div>
+
+      <div class="sect detail">
+        <div class="sect-head"><h3>Per thread</h3><span id="cpu-threads-cap">—</span></div>
+        <canvas class="cores" id="cpu-cores" role="img" aria-label="Per-thread load bars"></canvas>
+      </div>
+
+      <details class="fold detail" id="cpu-fold">
+        <summary><h3><svg class="caret" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5 7 5l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Top processes</h3><span id="cpu-proc-cap">—</span></summary>
+        <table class="procs">
+          <colgroup><col><col style="width:62px"><col style="width:64px"><col style="width:78px"></colgroup>
+          <thead><tr><th scope="col">Process</th><th scope="col">PID</th><th scope="col">CPU</th><th scope="col">RAM</th></tr></thead>
+          <tbody id="cpu-procs"></tbody>
+        </table>
+      </details>
+    </section>
+
+    <!-- GPU -->
+    <section class="card gpu" id="gpu-card" aria-label="GPU">
+      <div class="head">
+        <div class="id">
+          <div class="eyebrow">Graphics</div>
+          <h2 id="gpu-name">—</h2>
+          <div class="sub" id="gpu-sub">—</div>
+        </div>
+        <canvas class="head-spark" id="gpu-hspark" role="img" aria-label="GPU load over the last 60 seconds"></canvas>
+        <div class="led-wrap" title="Activity: flashes once per count"><div class="led"><i id="gpu-led"></i></div><span>ACT</span></div>
+      </div>
+
+      <div id="gpu-body" style="display:contents">
+        <div class="instrument">
+          <canvas class="dial" id="gpu-dial" role="img" aria-label="GPU load and temperature dial"></canvas>
+          <dl class="readouts">
+            <div class="row"><dt>Core clock</dt><dd id="gpu-clock">—</dd></div>
+            <div class="row"><dt>Board power</dt><dd id="gpu-power">—</dd></div>
+            <div class="row"><dt>Fan</dt><dd id="gpu-fan">—</dd></div>
+            <div class="row" style="display:block"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><dt>VRAM</dt><dd id="gpu-vram">—</dd></div><div class="meter thin"><i id="gpu-vram-bar"></i></div></div>
+            <div class="spark-wrap">
+              <div class="cap"><span>Load, last 60 s</span><span id="gpu-peak">peak —</span></div>
+              <canvas class="spark" id="gpu-spark"></canvas>
+            </div>
+          </dl>
+        </div>
+
+        <div class="geiger">
+          <span class="lbl">Activity</span>
+          <canvas id="gpu-geiger"></canvas>
+          <div class="cpm"><b id="gpu-cpm">0</b><span>CPM</span></div>
+        </div>
+
+        <div class="sect detail">
+          <div class="bw-top">
+            <h3 class="eyebrow" style="margin:0;color:var(--ink-2)">VRAM throughput</h3>
+            <div class="bw-val"><span id="gpu-bw">—</span><small>GB/s</small></div>
+          </div>
+          <div class="meter"><i id="gpu-bw-bar"></i></div>
+          <canvas class="spark" id="gpu-bw-spark" style="height:30px"></canvas>
+          <div class="foot"><span id="gpu-bw-note">Estimated from memory-controller busy time</span><span id="gpu-bw-peak">—</span></div>
+        </div>
+
+        <details class="fold detail" id="gpu-fold">
+          <summary><h3><svg class="caret" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5 7 5l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Top processes</h3><span id="gpu-proc-cap">—</span></summary>
+          <table class="procs">
+            <colgroup><col><col style="width:62px"><col style="width:64px"><col style="width:78px"></colgroup>
+            <thead><tr><th scope="col">Process</th><th scope="col">PID</th><th scope="col">GPU</th><th scope="col">VRAM</th></tr></thead>
+            <tbody id="gpu-procs"></tbody>
+          </table>
+        </details>
+      </div>
+      <div class="nogpu" id="gpu-none" hidden>
+        No GPU telemetry found. For NVIDIA cards install <code>nvidia-ml-py</code>; AMD cards need the <code>amdgpu</code> driver.
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+if (params.has('widget')) document.body.classList.add('widget');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+
+/* ---------- colors from tokens */
+let css = getComputedStyle(document.documentElement);
+const tok = n => css.getPropertyValue(n).trim();
+function hexToRgb(h) { h = h.replace('#', ''); if (h.length === 3) h = [...h].map(c => c + c).join(''); const n = parseInt(h, 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+const tint = hex => { const [r, g, b] = hexToRgb(hex); return a => `rgba(${r},${g},${b},${a})`; };
+let C, ACC, T, fg;
+function readTheme() {
+  css = getComputedStyle(document.documentElement);
+  C = { ink: tok('--ink'), ink3: tok('--ink-3'), cool: tint(tok('--cool')), warn: tint(tok('--warn')), hot: tint(tok('--hot')) };
+  ACC = { cpu: tint(tok('--cpu')), gpu: tint(tok('--gpu')) };
+  const rgb = tok('--fg') || '255, 255, 255';
+  fg = a => `rgba(${rgb},${a})`;
+  T = {
+    num: tok('--f-num'), ui: tok('--f-ui'), needle: tok('--needle'), disc: tok('--disc'),
+    faceHi: tok('--face-hi'), faceLo: tok('--face-lo'), glow: parseFloat(tok('--glow')) || 1,
+  };
+}
+readTheme();
+
+/* ---------- canvas helpers */
+function fit(c) {
+  const r = c.getBoundingClientRect(), d = Math.min(2, devicePixelRatio || 1);
+  const w = Math.max(1, Math.round(r.width * d)), h = Math.max(1, Math.round(r.height * d));
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const ctx = c.getContext('2d'); ctx.setTransform(d, 0, 0, d, 0, 0); ctx.clearRect(0, 0, r.width, r.height);
+  return { ctx, w: r.width, h: r.height };
+}
+function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h); }
+
+/* Needle with a little mass: a slightly underdamped spring, like a real meter movement. */
+class Spring {
+  constructor() { this.x = 0; this.v = 0; this.t = 0; }
+  step(dt) {
+    if (reduceMotion) return (this.x = this.t);
+    const k = 58, c = 11.5;
+    this.v += (k * (this.t - this.x) - c * this.v) * dt;
+    this.x += this.v * dt;
+    return this.x;
+  }
+}
+
+function pointer(ctx, cx, cy, a, r0, r1, w, glow) {
+  const ux = Math.cos(a), uy = Math.sin(a), px = -uy * w, py = ux * w;
+  ctx.save();
+  ctx.shadowColor = glow; ctx.shadowBlur = 10 * T.glow;
+  ctx.beginPath();
+  ctx.moveTo(cx + ux * r0 + px, cy + uy * r0 + py);
+  ctx.lineTo(cx + ux * r1, cy + uy * r1);
+  ctx.lineTo(cx + ux * r0 - px, cy + uy * r0 - py);
+  ctx.closePath(); ctx.fillStyle = T.needle; ctx.fill();
+  ctx.restore();
+}
+
+const A0 = 0.75 * Math.PI, SWEEP = 1.5 * Math.PI;
+const angle = v => A0 + SWEEP * clamp(v);
+const TEMP_MIN = 20, TEMP_MAX = 100;
+
+/* Dual dial: load on the main face, temperature on the inset sub-dial in the bottom gap. */
+function drawDial(canvas, load, tempNorm, tempC, acc, zones) {
+  const { ctx, w, h } = fit(canvas);
+  const cx = w / 2, cy = h * 0.455, R = Math.min(w / 2 - 6, cy - 4);
+
+  // face
+  const face = ctx.createRadialGradient(cx, cy - R * .5, R * .1, cx, cy, R);
+  face.addColorStop(0, T.faceHi); face.addColorStop(1, T.faceLo);
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fillStyle = face; ctx.fill();
+  ctx.lineWidth = 1; ctx.strokeStyle = fg(.10); ctx.stroke();
+
+  // ticks: every 2%, major every 10%, lit up to the needle
+  for (let i = 0; i <= 50; i++) {
+    const v = i / 50, a = angle(v), major = i % 5 === 0;
+    const r1 = R - 4, r0 = R - (major ? 12 : 7);
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
+    ctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+    ctx.lineWidth = major ? 1.6 : 1;
+    ctx.strokeStyle = v <= load + 0.001 ? acc(major ? 1 : .75) : (major ? fg(.30) : fg(.12));
+    ctx.stroke();
+  }
+  ctx.font = `400 8.5px ${T.num}`; ctx.fillStyle = C.ink3; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+  for (const [v, t] of [[0, '0'], [0.5, '50'], [1, '100']]) {
+    const a = angle(v); ctx.fillText(t, cx + Math.cos(a) * (R - 21), cy + Math.sin(a) * (R - 21));
+  }
+
+  // value arc
+  const ra = R - 30;
+  ctx.lineCap = 'round'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(cx, cy, ra, A0, A0 + SWEEP); ctx.strokeStyle = fg(.06); ctx.stroke();
+  if (load > 0.004) {
+    let stroke = acc(1);
+    if (ctx.createConicGradient) {
+      stroke = ctx.createConicGradient(A0, cx, cy);
+      stroke.addColorStop(0, acc(.25)); stroke.addColorStop(.75, acc(1)); stroke.addColorStop(1, acc(1));
+    }
+    ctx.save(); ctx.shadowColor = acc(.7); ctx.shadowBlur = 12 * T.glow;
+    ctx.beginPath(); ctx.arc(cx, cy, ra, A0, angle(load)); ctx.strokeStyle = stroke; ctx.stroke(); ctx.restore();
+  }
+  pointer(ctx, cx, cy, angle(load), ra - 9, R - 2, 2.2, acc(.9));
+
+  // readout
+  const pct = String(Math.round(clamp(load) * 100));
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = `300 ${Math.round(R * .38)}px ${T.num}`;
+  const nw = ctx.measureText(pct).width;
+  ctx.font = `500 11px ${T.num}`;
+  const uw = ctx.measureText('%').width;
+  const x0 = cx - (nw + uw + 2) / 2;
+  ctx.textAlign = 'left'; ctx.fillStyle = C.ink;
+  ctx.font = `300 ${Math.round(R * .38)}px ${T.num}`; ctx.fillText(pct, x0, cy + R * .1);
+  ctx.font = `500 11px ${T.num}`; ctx.fillStyle = C.ink3; ctx.fillText('%', x0 + nw + 2, cy + R * .1);
+  ctx.textAlign = 'center'; ctx.font = `600 8px ${T.ui}`;
+  ctx.fillText('LOAD', cx, cy - R * .26);
+
+  // inset temperature sub-dial
+  const sx = cx, sy = cy + R * .73, sr = R * .34;
+  ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+  ctx.fillStyle = T.disc; ctx.fill();
+  ctx.strokeStyle = fg(.14); ctx.lineWidth = 1; ctx.stroke();
+  const tv = t => (t - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
+  const bands = [[TEMP_MIN, zones[0], C.cool], [zones[0], zones[1], C.warn], [zones[1], TEMP_MAX, C.hot]];
+  ctx.lineCap = 'butt'; ctx.lineWidth = 2.5;
+  for (const [a, b, col] of bands) {
+    ctx.beginPath(); ctx.arc(sx, sy, sr - 4, angle(tv(a)) + .03, angle(tv(b)) - .03); ctx.strokeStyle = col(.55); ctx.stroke();
+  }
+  if (tempC != null) {
+    const zone = tempC >= zones[1] ? C.hot : tempC >= zones[0] ? C.warn : C.cool;
+    pointer(ctx, sx, sy, angle(tempNorm), sr * .5, sr - 1, 1.4, zone(.9));
+  }
+  ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `400 ${Math.round(sr * .42)}px ${T.num}`;
+  ctx.fillText(tempC == null ? '—' : `${Math.round(tempC)}°`, sx, sy + 1);
+}
+
+/* Sparkline with area fill, faint midline and a lit endpoint. */
+function drawSpark(canvas, data, max, acc) {
+  const { ctx, w, h } = fit(canvas);
+  const n = 120, pad = 3;
+  ctx.strokeStyle = fg(.06); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, h / 2 + .5); ctx.lineTo(w, h / 2 + .5); ctx.stroke();
+  if (data.length < 2) return;
+  const x = i => w - pad - (data.length - 1 - i) * (w - pad * 2) / (n - 1);
+  const y = v => h - 2 - clamp(v / max) * (h - 5);
+  ctx.beginPath();
+  data.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+  ctx.save();
+  ctx.lineTo(x(data.length - 1), h); ctx.lineTo(x(0), h); ctx.closePath();
+  const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, acc(.30)); g.addColorStop(1, acc(0));
+  ctx.fillStyle = g; ctx.fill(); ctx.restore();
+  ctx.beginPath();
+  data.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+  ctx.strokeStyle = acc(.95); ctx.lineWidth = 1.25; ctx.lineJoin = 'round'; ctx.stroke();
+  const ex = x(data.length - 1), ey = y(data[data.length - 1]);
+  ctx.save(); ctx.shadowColor = acc(1); ctx.shadowBlur = 8 * T.glow;
+  ctx.beginPath(); ctx.arc(ex, ey, 2.4, 0, Math.PI * 2); ctx.fillStyle = T.needle; ctx.fill(); ctx.restore();
+}
+
+/* ---------- clicks: a short decaying noise burst, CPU panned left and GPU right */
+const audio = {
+  ctx: null, on: false,
+  enable() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    if (!this.ctx) {
+      this.ctx = new AC();
+      const len = Math.round(this.ctx.sampleRate * .004);
+      this.buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = this.buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (len * .16));
+      this.master = this.ctx.createGain(); this.master.gain.value = .4; this.master.connect(this.ctx.destination);
+    }
+    this.ctx.resume(); this.on = true; return true;
+  },
+  click(pan, amp, tone, delay) {
+    if (!this.on) return;
+    const a = this.ctx, src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+    src.buffer = this.buf; f.type = 'highpass'; f.frequency.value = tone; g.gain.value = .2 + .8 * amp;
+    src.connect(f).connect(g);
+    if (a.createStereoPanner) { const p = a.createStereoPanner(); p.pan.value = pan; g.connect(p).connect(this.master); }
+    else g.connect(this.master);
+    src.start(a.currentTime + delay);
+  }
+};
+
+function poisson(m) {
+  if (m <= 0) return 0;
+  if (m > 30) { const g = Math.sqrt(-2 * Math.log(Math.random() || 1e-9)) * Math.cos(2 * Math.PI * Math.random()); return Math.max(0, Math.round(m + Math.sqrt(m) * g)); }
+  let L = Math.exp(-m), k = 0, p = 1;
+  do { k++; p *= Math.random(); } while (p > L);
+  return k - 1;
+}
+
+/* Geiger counter: random counts whose rate climbs steeply with load. */
+class Geiger {
+  constructor(key, pan, tone) {
+    this.canvas = $(`${key}-geiger`); this.led = $(`${key}-led`); this.cpmEl = $(`${key}-cpm`);
+    this.key = key; this.pan = pan; this.tone = tone;
+    this.u = 0; this.lit = 0; this.events = []; this.lastCpm = 0;
+  }
+  step(dt, now) {
+    const u = clamp(this.u);
+    const n = poisson((0.4 + 80 * Math.pow(u, 1.7)) * dt);
+    for (let i = 0; i < n; i++) {
+      const off = Math.random() * dt;
+      const amp = clamp(0.25 + u * 0.55 + (Math.random() - 0.5) * 0.5, 0.15, 1);
+      this.events.push({ t: now - off, amp });
+      this.lit = Math.min(1, this.lit + 0.45 + amp * 0.5);
+      audio.click(this.pan, amp, this.tone, off);
+    }
+    this.lit *= Math.exp(-dt * 20);
+    this.led.style.opacity = this.lit.toFixed(3);
+    while (this.events.length && now - this.events[0].t > 10) this.events.shift();
+    if (now - this.lastCpm > 0.5) { this.lastCpm = now; this.cpmEl.textContent = (this.events.length * 6).toLocaleString(); }
+  }
+  draw(now) {
+    const { ctx, w, h } = fit(this.canvas);
+    const mid = h / 2, speed = w / 6, acc = ACC[this.key];
+    ctx.strokeStyle = fg(.07); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, mid + .5); ctx.lineTo(w, mid + .5); ctx.stroke();
+    for (const e of this.events) {
+      const age = now - e.t, x = w - 2 - age * speed;
+      if (x < 0) continue;
+      const fade = Math.exp(-age * .45) * clamp(x / 40);
+      const hh = (h - 4) * e.amp;
+      ctx.beginPath(); ctx.moveTo(x, mid - hh / 2); ctx.lineTo(x, mid + hh / 2);
+      ctx.lineWidth = 1.4;
+      if (age < 0.18) { ctx.save(); ctx.shadowColor = acc(1); ctx.shadowBlur = 9 * T.glow; ctx.strokeStyle = T.needle; ctx.stroke(); ctx.restore(); }
+      else { ctx.strokeStyle = acc(.15 + .8 * fade * e.amp); ctx.stroke(); }
+    }
+  }
+}
+
+/* Per-thread bars with peak-hold markers, like an audio level meter. */
+class Cores {
+  constructor(canvas) { this.c = canvas; this.t = []; this.v = []; this.pk = []; this.hold = []; }
+  set(arr) {
+    this.t = arr.map(x => x / 100);
+    while (this.v.length < this.t.length) { this.v.push(0); this.pk.push(0); this.hold.push(0); }
+    this.v.length = this.pk.length = this.hold.length = this.t.length;
+  }
+  step(dt) {
+    const k = reduceMotion ? 1 : 1 - Math.exp(-dt * 9);
+    for (let i = 0; i < this.t.length; i++) {
+      this.v[i] += (this.t[i] - this.v[i]) * k;
+      if (this.v[i] >= this.pk[i]) { this.pk[i] = this.v[i]; this.hold[i] = 1.2; }
+      else if ((this.hold[i] -= dt) < 0) this.pk[i] = Math.max(this.v[i], this.pk[i] - dt * .3);
+    }
+  }
+  draw() {
+    const { ctx, w, h } = fit(this.c), n = this.v.length, acc = ACC.cpu;
+    if (!n) return;
+    const gap = n > 24 ? 2 : 3, bw = (w - gap * (n - 1)) / n, H = h - 14;
+    const every = n <= 16 ? 1 : n <= 32 ? 4 : 8;
+    ctx.font = `400 8.5px ${T.num}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    for (let i = 0; i < n; i++) {
+      const x = i * (bw + gap), v = clamp(this.v[i]);
+      rrect(ctx, x, 0, bw, H, Math.min(2, bw / 2)); ctx.fillStyle = fg(.05); ctx.fill();
+      const bh = Math.max(1.5, v * H);
+      const g = ctx.createLinearGradient(0, H, 0, 0); g.addColorStop(0, acc(.3)); g.addColorStop(1, acc(1));
+      rrect(ctx, x, H - bh, bw, bh, Math.min(2, bw / 2)); ctx.fillStyle = g; ctx.globalAlpha = .35 + .65 * v; ctx.fill(); ctx.globalAlpha = 1;
+      const py = H - clamp(this.pk[i]) * H;
+      ctx.fillStyle = fg(.8); ctx.fillRect(x, Math.max(0, py - 1.5), bw, 1.5);
+      if (i % every === 0) { ctx.fillStyle = C.ink3; ctx.fillText(i, x + bw / 2, h - 1); }
+    }
+  }
+}
+
+/* ---------- state */
+const S = {
+  cpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], zones: [70, 85] },
+  gpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], bwHist: [], bwPeak: 1, zones: [70, 83], present: false },
+};
+const geigers = { cpu: new Geiger('cpu', -.6, 2600), gpu: new Geiger('gpu', .6, 1300) };
+const cores = new Cores($('cpu-cores'));
+
+const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '—' : Number(v).toFixed(d);
+const unit = (v, u, d = 0) => v == null ? '—' : `${fmt(v, d)}<small>${u}</small>`;
+const push = (arr, v) => { arr.push(v); if (arr.length > 120) arr.shift(); };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function ingest(d) {
+  const c = d.cpu;
+  if (c) {
+    $('cpu-name').textContent = c.name;
+    $('cpu-name').title = c.name;
+    $('cpu-sub').textContent = c.cores ? `${c.cores} cores · ${c.threads} threads` : `${c.threads} threads`;
+    const u = (c.util ?? 0) / 100;
+    S.cpu.load.t = u; S.cpu.tempC = c.temp; S.cpu.temp.t = c.temp == null ? 0 : (c.temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
+    geigers.cpu.u = u;
+    $('cpu-clock').innerHTML = c.freq_mhz ? unit(c.freq_mhz / 1000, 'GHz', 2) : '—';
+    $('cpu-power').innerHTML = unit(c.power_w, 'W', 0);
+    $('cpu-loadavg').textContent = c.load ? c.load.map(x => x.toFixed(1)).join(' ') : '—';
+    const pc = c.per_core || [];
+    if (pc.length) {
+      let bi = 0; pc.forEach((v, i) => { if (v > pc[bi]) bi = i; });
+      $('cpu-busiest').innerHTML = `#${bi} · ${fmt(pc[bi])}<small>%</small>`;
+      const active = pc.filter(v => v > 50).length;
+      $('cpu-threads-cap').textContent = `${active} of ${pc.length} above 50%`;
+      cores.set(pc);
+    }
+    push(S.cpu.hist, c.util ?? 0);
+    $('cpu-peak').textContent = `peak ${Math.round(Math.max(...S.cpu.hist))}%`;
+    drawSpark($('cpu-spark'), S.cpu.hist, 100, ACC.cpu);
+    drawSpark($('cpu-hspark'), S.cpu.hist, 100, ACC.cpu);
+    renderProcs('cpu', c.procs, 'mem_mb', 'No process data.');
+  }
+
+  const g = (d.gpus || []).find(x => !x.error);
+  S.gpu.present = !!g;
+  $('gpu-body').style.display = g ? 'contents' : 'none';
+  $('gpu-none').hidden = !!g;
+  if (!g) {
+    $('gpu-name').textContent = (d.gpus && d.gpus[0] && d.gpus[0].name) || 'No GPU detected';
+    $('gpu-sub').textContent = '—'; geigers.gpu.u = 0;
+    return;
+  }
+  $('gpu-name').textContent = g.name; $('gpu-name').title = g.name;
+  const sub = [];
+  if (g.vram_total_mb) sub.push(`${Math.round(g.vram_total_mb / 1024)} GB`);
+  if (g.bus_width) sub.push(`${g.bus_width}-bit bus`);
+  sub.push(g.vendor);
+  $('gpu-sub').textContent = sub.join(' · ');
+  const u = (g.util ?? 0) / 100, mu = (g.mem_util ?? 0) / 100;
+  S.gpu.load.t = u; S.gpu.tempC = g.temp; S.gpu.temp.t = g.temp == null ? 0 : (g.temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
+  geigers.gpu.u = Math.max(u, mu * .8);
+  $('gpu-clock').innerHTML = unit(g.clock_mhz, 'MHz');
+  $('gpu-power').innerHTML = g.power_w == null ? '—' : `${fmt(g.power_w)}${g.power_limit_w ? `<small>/ ${fmt(g.power_limit_w)} W</small>` : '<small>W</small>'}`;
+  $('gpu-fan').innerHTML = unit(g.fan_pct, '%');
+  if (g.vram_total_mb) {
+    $('gpu-vram').innerHTML = `${fmt(g.vram_used_mb / 1024, 1)}<small>/ ${fmt(g.vram_total_mb / 1024, 1)} GB</small>`;
+    $('gpu-vram-bar').style.width = `${clamp(g.vram_used_mb / g.vram_total_mb) * 100}%`;
+  }
+  push(S.gpu.hist, g.util ?? 0);
+  $('gpu-peak').textContent = `peak ${Math.round(Math.max(...S.gpu.hist))}%`;
+  drawSpark($('gpu-spark'), S.gpu.hist, 100, ACC.gpu);
+  drawSpark($('gpu-hspark'), S.gpu.hist, 100, ACC.gpu);
+
+  if (g.bw_gbps != null) {
+    $('gpu-bw').textContent = g.bw_gbps >= 100 ? fmt(g.bw_gbps) : fmt(g.bw_gbps, 1);
+    S.gpu.bwPeak = g.bw_peak_gbps || Math.max(S.gpu.bwPeak, g.bw_gbps);
+    $('gpu-bw-bar').style.width = `${clamp(g.bw_gbps / S.gpu.bwPeak) * 100}%`;
+    $('gpu-bw-peak').textContent = g.bw_peak_gbps ? `peak ${fmt(g.bw_peak_gbps)} GB/s` : '';
+    push(S.gpu.bwHist, g.bw_gbps);
+    $('gpu-bw-note').textContent = 'Estimated from memory-controller busy time';
+  } else {
+    $('gpu-bw').textContent = g.mem_util == null ? '—' : `${fmt(g.mem_util)}%`;
+    $('gpu-bw-bar').style.width = `${mu * 100}%`;
+    $('gpu-bw-peak').textContent = '';
+    push(S.gpu.bwHist, (g.mem_util ?? 0));
+    $('gpu-bw-note').textContent = 'Memory-controller busy. Pass --amd-peak-bw for GB/s';
+  }
+  drawSpark($('gpu-bw-spark'), S.gpu.bwHist, g.bw_gbps != null ? S.gpu.bwPeak : 100, ACC.gpu);
+
+  renderProcs('gpu', g.procs, 'vram_mb', 'No processes are using the GPU.');
+}
+
+const mem = mb => mb >= 1024 ? `${fmt(mb / 1024, 1)} GB` : `${fmt(mb)} MB`;
+function renderProcs(key, procs, memKey, emptyText) {
+  procs = (procs || []).slice(0, 10);
+  const top = procs[0];
+  $(`${key}-proc-cap`).textContent = top ? `${top.name} · ${fmt(top.util)}%` : '';
+  $(`${key}-procs`).innerHTML = procs.length ? procs.map(p => `
+    <tr><td class="name" title="${esc(p.name)}">${esc(p.name)}</td>
+    <td class="n">${p.pid}</td>
+    <td class="n u"><span>${fmt(p.util)}%</span><i class="b" style="width:${clamp(p.util / 100) * 100}%"></i></td>
+    <td class="n">${mem(p[memKey] || 0)}</td></tr>`).join('')
+    : `<tr class="empty"><td colspan="4">${emptyText}</td></tr>`;
+}
+
+/* ---------- animation loop */
+let last = performance.now();
+function frame(t) {
+  const dt = Math.min(.05, (t - last) / 1000), now = t / 1000; last = t;
+  for (const k of ['cpu', 'gpu']) {
+    const s = S[k];
+    s.load.step(dt); s.temp.step(dt);
+    geigers[k].step(dt, now);
+    if (k === 'gpu' && !s.present) continue;
+    drawDial($(`${k}-dial`), s.load.x, s.temp.x, s.tempC, ACC[k], s.zones);
+    geigers[k].draw(now);
+  }
+  if (!document.getElementById('deck').classList.contains('compact')) { cores.step(dt); cores.draw(); }
+  requestAnimationFrame(frame);
+}
+
+/* ---------- data sources */
+function setSource(state, text) { $('source').dataset.state = state; $('source-text').textContent = text; }
+
+function connect() {
+  if (params.has('demo') || !/^https?:$/.test(location.protocol) || typeof EventSource === 'undefined') return startDemo();
+  const base = params.get('src') || '';
+  let got = false, es;
+  try { es = new EventSource(`${base}/stream`); } catch { return startDemo(); }
+  const giveUp = setTimeout(() => { if (!got) { es.close(); startDemo(); } }, 2500);
+  es.onmessage = e => {
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    if (!got) { got = true; clearTimeout(giveUp); }
+    setSource('live', `Live · ${d.host || location.host} · every ${d.interval ?? .5} s`);
+    ingest(d);
+  };
+  es.onerror = () => {
+    if (!got) { clearTimeout(giveUp); es.close(); startDemo(); }
+    else setSource('lost', 'Reconnecting…');
+  };
+}
+
+function startDemo() {
+  setSource('demo', 'Demo data · run the backend for live readings');
+  const sim = demo();
+  ingest(sim()); setInterval(() => ingest(sim()), 500);
+}
+
+/* Plausible workstation: 16-core CPU and a 16 GB card cycling through idle, browsing, builds and renders. */
+function demo() {
+  const N = 32, rnd = (a, b) => a + Math.random() * (b - a);
+  let t = 0, scene = null, gscene = null, temp = 44, gtemp = 40, vram = 6100, la = [1.2, 1.4, 1.5];
+  const core = Array(N).fill(.05);
+  let gu = .05, mu = .03, fan = 30;
+  const cpuScenes = [
+    { g: .03, label: 'idle' }, { g: .09, label: 'browsing' }, { g: .22 }, { g: .5 }, { g: .93, label: 'build' }, { g: .12, single: true },
+  ];
+  const gpuScenes = [
+    { g: .04, m: .03, lead: 4 }, { g: .18, m: .1, lead: 4 }, { g: .9, m: .55, lead: 0 }, { g: .97, m: .82, lead: 1 }, { g: .62, m: .4, lead: 5 },
+  ];
+  const procs = [
+    { pid: 48211, name: 'blender', vram: 3180 },
+    { pid: 51907, name: 'python3', vram: 5420 },
+    { pid: 2214, name: 'Xorg', vram: 212 },
+    { pid: 2630, name: 'kwin_wayland', vram: 184 },
+    { pid: 3377, name: 'firefox', vram: 655 },
+    { pid: 39054, name: 'obs', vram: 418 },
+    { pid: 4102, name: 'steamwebhelper', vram: 163 },
+    { pid: 3951, name: 'code', vram: 121 },
+    { pid: 44870, name: 'mpv', vram: 88 },
+    { pid: 3120, name: 'plasmashell', vram: 140 },
+    { pid: 3401, name: 'discord', vram: 96 },
+  ];
+  const cpuList = [
+    { pid: 61204, name: 'cc1plus', mem: 412, build: true },
+    { pid: 61188, name: 'cc1plus', mem: 388, build: true },
+    { pid: 61230, name: 'ld.lld', mem: 1290, build: true },
+    { pid: 3377, name: 'firefox', mem: 2140 },
+    { pid: 48211, name: 'blender', mem: 3610 },
+    { pid: 3951, name: 'code', mem: 980 },
+    { pid: 2630, name: 'kwin_wayland', mem: 310 },
+    { pid: 39054, name: 'obs', mem: 520 },
+    { pid: 3401, name: 'discord', mem: 640 },
+    { pid: 1, name: 'systemd', mem: 14 },
+    { pid: 812, name: 'pipewire', mem: 38 },
+    { pid: 1450, name: 'Xwayland', mem: 120 },
+  ];
+  // Shares of total machine load; builds dominate when the CPU is pinned.
+  const cpuProcs = util => {
+    const w = cpuList.map(p => (p.build ? util * util * 6 : 1) * rnd(.2, 1) * (p.pid < 1000 ? .15 : 1)
+      + (scene.single && p.name === 'blender' ? 4 : 0));
+    const sum = w.reduce((a, b) => a + b, 0);
+    return cpuList.map((p, i) => ({ pid: p.pid, name: p.name, util: util * 100 * w[i] / sum, mem_mb: p.mem * rnd(.97, 1.03) }))
+      .sort((a, b) => b.util - a.util).slice(0, 10);
+  };
+  return () => {
+    t += .5;
+    if (!scene || t > scene.until) {
+      const s = cpuScenes[Math.floor(Math.random() * cpuScenes.length)];
+      scene = { ...s, until: t + rnd(4, 11), hot: Math.floor(Math.random() * N) };
+    }
+    if (!gscene || t > gscene.until) {
+      const s = gpuScenes[Math.floor(Math.random() * gpuScenes.length)];
+      gscene = { ...s, until: t + rnd(5, 12) };
+    }
+    for (let i = 0; i < N; i++) {
+      let target = clamp(scene.g + (Math.random() - .5) * (scene.g > .8 ? .12 : .3) * (1 + scene.g));
+      if (scene.single && i === scene.hot) target = rnd(.92, 1);
+      if (Math.random() < .015) target = Math.random();
+      core[i] = clamp(core[i] + (target - core[i]) * .5);
+    }
+    const util = core.reduce((a, b) => a + b, 0) / N;
+    temp += (36 + 54 * Math.pow(util, .75) + (scene.single ? 8 : 0) - temp) * .12 + rnd(-.3, .3);
+    la = la.map((v, i) => v + (util * N - v) * [.04, .012, .004][i]);
+    gu += (clamp(gscene.g + rnd(-.06, .06)) - gu) * .4;
+    mu += (clamp(gscene.m + rnd(-.08, .08)) - mu) * .4;
+    gtemp += (34 + 44 * gu - gtemp) * .08 + rnd(-.2, .2);
+    fan += (Math.max(0, (gtemp - 50) * 2.2) - fan) * .1;
+    vram += (3200 + gu * 9000 - vram) * .03 + rnd(-30, 30);
+    const peak = 716.8;
+    const weights = procs.map((p, i) => (i === gscene.lead ? 8 : 1) * rnd(.2, 1) * (i < 6 ? 1 : .3));
+    const wsum = weights.reduce((a, b) => a + b, 0);
+    const plist = procs.map((p, i) => ({ pid: p.pid, name: p.name, util: gu * 100 * weights[i] / wsum, vram_mb: p.vram * (i === gscene.lead ? 1 + gu : 1) }))
+      .sort((a, b) => b.util - a.util || b.vram_mb - a.vram_mb).slice(0, 10);
+    return {
+      host: 'demo', interval: .5,
+      cpu: {
+        name: 'AMD Ryzen 9 7950X', cores: 16, threads: N, util: util * 100, per_core: core.map(v => v * 100),
+        temp, freq_mhz: util < .05 ? rnd(3000, 3800) : (scene.single ? rnd(5600, 5700) : 5150 - util * 600 + rnd(-40, 40)),
+        power_w: 32 + 195 * Math.pow(util, 1.1), load: la, procs: cpuProcs(util),
+      },
+      gpus: [{
+        name: 'NVIDIA GeForce RTX 4080', vendor: 'NVIDIA', util: gu * 100, mem_util: mu * 100, temp: gtemp,
+        clock_mhz: gu < .08 ? rnd(210, 420) : 2715 - gu * 180 + rnd(-15, 15),
+        power_w: 18 + 290 * Math.pow(gu, 1.15), power_limit_w: 320, fan_pct: fan,
+        vram_used_mb: vram, vram_total_mb: 16376, bw_gbps: peak * mu, bw_peak_gbps: peak, bus_width: 256, procs: plist,
+      }],
+    };
+  };
+}
+
+/* ---------- controls */
+$('sound').addEventListener('click', e => {
+  const on = !audio.on;
+  if (on) { if (!audio.enable()) return; } else audio.on = false;
+  e.currentTarget.setAttribute('aria-pressed', on);
+  $('sound-text').textContent = on ? 'Clicks on' : 'Clicks off';
+  $('wave').setAttribute('opacity', on ? '1' : '.35');
+});
+function setCompact(on) {
+  $('deck').classList.toggle('compact', on);
+  $('compact').setAttribute('aria-pressed', on);
+  try { localStorage.setItem('pcmeter.compact', on ? '1' : '0'); } catch {}
+}
+$('compact').addEventListener('click', () => setCompact(!$('deck').classList.contains('compact')));
+try { if (localStorage.getItem('pcmeter.compact') === '1') setCompact(true); } catch {}
+for (const key of ['cpu', 'gpu']) {
+  const fold = $(`${key}-fold`), store = `pcmeter.fold.${key}`;
+  try { fold.open = localStorage.getItem(store) === '1'; } catch {}
+  fold.addEventListener('toggle', () => { try { localStorage.setItem(store, fold.open ? '1' : '0'); } catch {} });
+}
+
+const SKINS = [...$('skin').options].map(o => o.value);
+function setSkin(name) {
+  if (!SKINS.includes(name)) name = 'glass';
+  document.documentElement.dataset.skin = name;
+  $('skin').value = name;
+  readTheme();
+  try { localStorage.setItem('pcmeter.skin', name); } catch {}
+}
+$('skin').addEventListener('change', e => setSkin(e.target.value));
+let savedSkin = params.get('skin');
+try { savedSkin = savedSkin || localStorage.getItem('pcmeter.skin'); } catch {}
+setSkin(savedSkin || 'glass');
+
+connect();
+requestAnimationFrame(frame);
+})();
+</script>
