@@ -11,7 +11,28 @@ the toolbar, or start with one using `?skin=matrix`. Every skin is a block of CS
 tokens at the top of `web/index.html`; the dials and strips read the same tokens,
 so adding a skin means adding one block and one `<option>`.
 
-## Run (Linux)
+## Install (Linux, including Bazzite and other immutable distros)
+
+Download `PCmeter-<version>-linux-x86_64.tar.gz` from the
+[latest release](https://github.com/CharlesMod/PCmeter/releases/latest), then:
+
+```bash
+tar xzf PCmeter-*-linux-x86_64.tar.gz
+cd PCmeter-*-linux-x86_64
+./install.sh
+```
+
+That puts PCmeter in `~/.local/bin` and adds an app-menu entry and a desktop
+shortcut; nothing outside your home folder changes. On KDE Plasma, the first click on
+the desktop icon may ask whether to run it. `./install.sh --uninstall` removes it all.
+
+The shortcut runs `pcmeter --app`: it opens PCmeter in its own window (using Chrome,
+Chromium, Brave, Edge or Vivaldi if one is installed, natively or as a Flatpak;
+otherwise your default browser), reuses a copy that is already running, and quits
+20 seconds after you close the last window. NVIDIA cards need the proprietary driver;
+AMD cards work out of the box.
+
+## Run from source
 
 ```bash
 pip install -r requirements.txt
@@ -41,6 +62,13 @@ open `web/index.html` directly from disk.
 - **Activity** is a Poisson process whose rate rises steeply with load, from about
   25 counts per minute at idle to about 4,800 at full load. *Clicks* plays them
   as audio, CPU on the left channel and GPU on the right.
+
+## Build the binary
+
+```bash
+pip install -r requirements.txt pyinstaller
+packaging/build.sh
+```
 
 ## Roadmap
 

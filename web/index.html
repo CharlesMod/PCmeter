@@ -335,6 +335,17 @@ body.widget { background: transparent; }
 /* Children may never widen the card: long process names ellipsize instead. */
 .card > * { position: relative; min-width: 0; }
 
+/* Text that does not fit is clipped and drifts back and forth to show the rest. */
+.clip { overflow: hidden; white-space: nowrap; min-width: 0; }
+.clip > .run { display: inline-block; vertical-align: top; }
+.clip.over {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 12px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 12px), transparent);
+}
+.clip.over > .run { animation: drift var(--dur, 8s) ease-in-out infinite alternate; }
+@keyframes drift { 0%, 18% { transform: translateX(0); } 82%, 100% { transform: translateX(var(--shift, 0)); } }
+@media (prefers-reduced-motion: reduce) { .clip.over > .run { animation: none; } }
+
 .head { display: flex; align-items: flex-start; gap: 12px; }
 .head .id { min-width: 0; flex: 1; }
 .head-spark { display: none; flex: 1 1 0; min-width: 40px; height: 40px; align-self: center; }
@@ -346,7 +357,6 @@ body.widget { background: transparent; }
 }
 .head h2 {
   margin: 3px 0 2px; font-size: 15px; font-weight: 500; line-height: 1.25;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .sub { font-size: 12px; color: var(--ink-2); }
 
@@ -373,14 +383,13 @@ body.widget { background: transparent; }
 .dial { width: 176px; height: 176px; display: block; }
 .readouts { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; }
 .row {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 7px 0; border-bottom: 1px solid var(--hair);
 }
 .row dt { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; flex: none; }
 .row dd { min-width: 0; }
 .row dd {
   margin: 0; font: 400 13.5px var(--f-num); font-variant-numeric: tabular-nums;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .row dd small, .num small { font-family: var(--f-ui); font-size: 10.5px; color: var(--ink-3); margin-left: 3px; }
 .spark-wrap { padding-top: 8px; display: grid; gap: 3px; }
@@ -431,11 +440,12 @@ body.widget { background: transparent; }
 .procs th:first-child, .procs td:first-child { text-align: left; }
 .procs td { padding: 5px 0; border-bottom: 1px solid var(--hair); text-align: right; }
 .procs tr:last-child td { border-bottom: 0; }
-.procs td.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 8px; }
+.procs td.name { padding-right: 8px; }
 .procs td.n { font: 400 11.5px var(--f-num); font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .procs td.u { position: relative; }
 .procs td.u .b {
-  position: absolute; right: 0; bottom: 2px; height: 2px; border-radius: 2px;
+  position: absolute; right: 0; bottom: 2px; height: 2px; width: 100%; border-radius: 2px;
+  transform-origin: right center;
   background: var(--acc); box-shadow: 0 0 6px var(--acc);
 }
 .procs td.u span { color: var(--ink); }
@@ -458,7 +468,7 @@ body.widget { background: transparent; }
 .fold > summary:hover h3 { color: var(--ink); }
 .fold > summary > span {
   font: 400 11px var(--f-num); color: var(--ink-3); font-variant-numeric: tabular-nums;
-  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
 }
 .caret { width: 10px; height: 10px; flex: none; color: var(--acc); transition: transform .22s cubic-bezier(.2,.7,.3,1); }
 .fold[open] .caret { transform: rotate(90deg); }
@@ -518,7 +528,7 @@ body.widget { background: transparent; }
       <div class="head">
         <div class="id">
           <div class="eyebrow">Processor</div>
-          <h2 id="cpu-name">—</h2>
+          <h2 class="clip" id="cpu-name"><span class="run">—</span></h2>
           <div class="sub" id="cpu-sub">—</div>
         </div>
         <canvas class="head-spark" id="cpu-hspark" role="img" aria-label="CPU load over the last 60 seconds"></canvas>
@@ -528,10 +538,10 @@ body.widget { background: transparent; }
       <div class="instrument">
         <canvas class="dial" id="cpu-dial" role="img" aria-label="CPU load and temperature dial"></canvas>
         <dl class="readouts">
-          <div class="row"><dt>Clock</dt><dd id="cpu-clock">—</dd></div>
-          <div class="row"><dt>Package power</dt><dd id="cpu-power">—</dd></div>
-          <div class="row"><dt title="1, 5 and 15 minute load average">Load avg</dt><dd id="cpu-loadavg">—</dd></div>
-          <div class="row"><dt>Busiest thread</dt><dd id="cpu-busiest">—</dd></div>
+          <div class="row"><dt>Clock</dt><dd class="clip" id="cpu-clock"><span class="run">—</span></dd></div>
+          <div class="row"><dt>Package power</dt><dd class="clip" id="cpu-power"><span class="run">—</span></dd></div>
+          <div class="row"><dt title="1, 5 and 15 minute load average">Load avg</dt><dd class="clip" id="cpu-loadavg"><span class="run">—</span></dd></div>
+          <div class="row"><dt>Busiest thread</dt><dd class="clip" id="cpu-busiest"><span class="run">—</span></dd></div>
           <div class="spark-wrap">
             <div class="cap"><span>Load, last 60 s</span><span id="cpu-peak">peak —</span></div>
             <canvas class="spark" id="cpu-spark"></canvas>
@@ -551,7 +561,7 @@ body.widget { background: transparent; }
       </div>
 
       <details class="fold detail" id="cpu-fold">
-        <summary><h3><svg class="caret" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5 7 5l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Top processes</h3><span id="cpu-proc-cap">—</span></summary>
+        <summary><h3><svg class="caret" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5 7 5l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Top processes</h3><span class="clip" id="cpu-proc-cap"><span class="run">—</span></span></summary>
         <table class="procs">
           <colgroup><col><col style="width:62px"><col style="width:64px"><col style="width:78px"></colgroup>
           <thead><tr><th scope="col">Process</th><th scope="col">PID</th><th scope="col">CPU</th><th scope="col">RAM</th></tr></thead>
@@ -565,7 +575,7 @@ body.widget { background: transparent; }
       <div class="head">
         <div class="id">
           <div class="eyebrow">Graphics</div>
-          <h2 id="gpu-name">—</h2>
+          <h2 class="clip" id="gpu-name"><span class="run">—</span></h2>
           <div class="sub" id="gpu-sub">—</div>
         </div>
         <canvas class="head-spark" id="gpu-hspark" role="img" aria-label="GPU load over the last 60 seconds"></canvas>
@@ -576,10 +586,10 @@ body.widget { background: transparent; }
         <div class="instrument">
           <canvas class="dial" id="gpu-dial" role="img" aria-label="GPU load and temperature dial"></canvas>
           <dl class="readouts">
-            <div class="row"><dt>Core clock</dt><dd id="gpu-clock">—</dd></div>
-            <div class="row"><dt>Board power</dt><dd id="gpu-power">—</dd></div>
-            <div class="row"><dt>Fan</dt><dd id="gpu-fan">—</dd></div>
-            <div class="row" style="display:block"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><dt>VRAM</dt><dd id="gpu-vram">—</dd></div><div class="meter thin"><i id="gpu-vram-bar"></i></div></div>
+            <div class="row"><dt>Core clock</dt><dd class="clip" id="gpu-clock"><span class="run">—</span></dd></div>
+            <div class="row"><dt>Board power</dt><dd class="clip" id="gpu-power"><span class="run">—</span></dd></div>
+            <div class="row"><dt>Fan</dt><dd class="clip" id="gpu-fan"><span class="run">—</span></dd></div>
+            <div class="row" style="display:block"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><dt>VRAM</dt><dd class="clip" id="gpu-vram"><span class="run">—</span></dd></div><div class="meter thin"><i id="gpu-vram-bar"></i></div></div>
             <div class="spark-wrap">
               <div class="cap"><span>Load, last 60 s</span><span id="gpu-peak">peak —</span></div>
               <canvas class="spark" id="gpu-spark"></canvas>
@@ -604,7 +614,7 @@ body.widget { background: transparent; }
         </div>
 
         <details class="fold detail" id="gpu-fold">
-          <summary><h3><svg class="caret" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5 7 5l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Top processes</h3><span id="gpu-proc-cap">—</span></summary>
+          <summary><h3><svg class="caret" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5 7 5l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Top processes</h3><span class="clip" id="gpu-proc-cap"><span class="run">—</span></span></summary>
           <table class="procs">
             <colgroup><col><col style="width:62px"><col style="width:64px"><col style="width:78px"></colgroup>
             <thead><tr><th scope="col">Process</th><th scope="col">PID</th><th scope="col">GPU</th><th scope="col">VRAM</th></tr></thead>
@@ -651,7 +661,6 @@ readTheme();
    Sizes come from a ResizeObserver, so drawing never forces a layout. A canvas that is
    hidden (compact mode, folded) has no size and is skipped; when it reappears it repaints. */
 const sizes = new Map();
-const painters = new Map();   // canvas -> repaint from the last data (sparklines)
 const stale = new Set();      // canvases cleared by a resize, waiting for the frame loop
 const ro = new ResizeObserver(entries => {
   for (const e of entries) {
@@ -659,7 +668,7 @@ const ro = new ResizeObserver(entries => {
     const w = e.contentRect.width, h = e.contentRect.height;
     sizes.set(c, { w, h, d, ctx: c.getContext('2d') });
     c.width = Math.max(1, Math.round(w * d)); c.height = Math.max(1, Math.round(h * d));
-    if (painters.has(c)) painters.get(c)(); else stale.add(c);
+    stale.add(c);
   }
 });
 document.querySelectorAll('canvas').forEach(c => ro.observe(c));
@@ -801,26 +810,39 @@ function drawDial(canvas, load, tNorm, tempC, acc, zones) {
   ctx.fillText(tempC == null ? '—' : `${Math.round(tempC)}°`, g.sx, g.sy + 1);
 }
 
-/* Sparkline with area fill, faint midline and a lit endpoint. Repaints itself after a resize. */
-function drawSpark(canvas, data, max, key) {
-  painters.set(canvas, () => drawSpark(canvas, data, max, key));
+/* Sparkline with area fill, faint midline and a lit endpoint.
+   Between samples the trace glides left and the newest value eases in, so it never steps. */
+const SPARK_POINTS = 120;
+const sparks = new Map();   // canvas -> { data, max(), key }
+function addSpark(id, data, max, key) { sparks.set($(id), { data, max, key, drawnAt: -1 }); }
+function curve(p, pts) {
+  p.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 0; i < pts.length - 1; i++) {   // Catmull-Rom through every sample
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+    p.bezierCurveTo(p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6,
+                    p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6, p2[0], p2[1]);
+  }
+}
+function drawSpark(canvas, spec, f) {
   const s = fit(canvas);
   if (!s) return;
-  const { ctx, w, h } = s, acc = ACC[key];
-  const n = 120, pad = 3;
+  const { ctx, w, h } = s, acc = ACC[spec.key], data = spec.data, max = spec.max(), m = data.length;
+  const pad = 3, step = (w - pad * 2) / (SPARK_POINTS - 1), right = w - pad;
   ctx.strokeStyle = fg(.06); ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, h / 2 + .5); ctx.lineTo(w, h / 2 + .5); ctx.stroke();
-  if (data.length < 2) return;
-  const line = new Path2D();
-  const x = i => w - pad - (data.length - 1 - i) * (w - pad * 2) / (n - 1);
-  const y = v => h - 2 - clamp(v / max) * (h - 5);
-  data.forEach((v, i) => i ? line.lineTo(x(i), y(v)) : line.moveTo(x(i), y(v)));
+  if (m < 2) return;
+  const y = v => h - 2.5 - clamp(v / max) * (h - 6);
+  const pts = [];
+  for (let j = 0; j < m - 1; j++) pts.push([right - (m - 2 - j + f) * step, y(data[j])]);
+  const e = f * f * (3 - 2 * f);
+  pts.push([right, y(data[m - 2] + (data[m - 1] - data[m - 2]) * e)]);
+  const line = new Path2D(); curve(line, pts);
   const area = new Path2D(line);
-  area.lineTo(x(data.length - 1), h); area.lineTo(x(0), h); area.closePath();
+  area.lineTo(pts[pts.length - 1][0], h); area.lineTo(pts[0][0], h); area.closePath();
   const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, acc(.30)); g.addColorStop(1, acc(0));
   ctx.fillStyle = g; ctx.fill(area);
   ctx.strokeStyle = acc(.95); ctx.lineWidth = 1.25; ctx.lineJoin = 'round'; ctx.stroke(line);
-  const ex = x(data.length - 1), ey = y(data[data.length - 1]);
+  const [ex, ey] = pts[pts.length - 1];
   ctx.save(); ctx.shadowColor = acc(1); ctx.shadowBlur = 8 * T.glow;
   ctx.beginPath(); ctx.arc(ex, ey, 2.4, 0, Math.PI * 2); ctx.fillStyle = T.needle; ctx.fill(); ctx.restore();
 }
@@ -976,7 +998,12 @@ const S = {
 const geigers = { cpu: new Geiger('cpu', -.6, 2600), gpu: new Geiger('gpu', .6, 1300) };
 const cores = new Cores($('cpu-cores'));
 const deck = $('deck');
-let lastData = null;
+let lastData = null, sampleAt = 0, sampleMs = 500;
+addSpark('cpu-spark', S.cpu.hist, () => 100, 'cpu');
+addSpark('cpu-hspark', S.cpu.hist, () => 100, 'cpu');
+addSpark('gpu-spark', S.gpu.hist, () => 100, 'gpu');
+addSpark('gpu-hspark', S.gpu.hist, () => 100, 'gpu');
+addSpark('gpu-bw-spark', S.gpu.bwHist, () => S.gpu.bwMax || 100, 'gpu');
 
 const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '—' : Number(v).toFixed(d);
 const unit = (v, u, d = 0) => v == null ? '—' : `${fmt(v, d)}<small>${u}</small>`;
@@ -988,7 +1015,25 @@ const written = new Map();
 function put(id, value, html) {
   if (written.get(id) === value) return;
   written.set(id, value);
-  if (html) $(id).innerHTML = value; else $(id).textContent = value;
+  const el = $(id), target = el.classList.contains('clip') ? el.firstElementChild : el;
+  if (html) target.innerHTML = value; else target.textContent = value;
+  if (target !== el) toFit.add(el);
+}
+
+/* Clipped text: measured in one batch per frame (all reads, then all writes) so it never thrashes layout. */
+const toFit = new Set();
+const clipRO = new ResizeObserver(entries => entries.forEach(e => toFit.add(e.target)));
+document.querySelectorAll('.clip').forEach(el => clipRO.observe(el));
+function fitClips() {
+  const plan = [...toFit].map(el => [el, el.firstElementChild.scrollWidth - el.clientWidth]);
+  toFit.clear();
+  for (const [el, over] of plan) {
+    if (over > 1) {
+      el.style.setProperty('--shift', `${-(over + 12)}px`);
+      el.style.setProperty('--dur', `${(2.5 + (over + 12) / 22).toFixed(1)}s`);
+      el.classList.add('over');
+    } else el.classList.remove('over');
+  }
 }
 /* Meters scale instead of changing width, so their animation never triggers layout. */
 function putWidth(id, frac) {
@@ -1000,6 +1045,7 @@ function putWidth(id, frac) {
 /* New data: update targets and history now; the DOM only while the page is visible. */
 function ingest(d) {
   lastData = d;
+  sampleAt = performance.now(); sampleMs = (d.interval || .5) * 1000;
   const c = d.cpu;
   if (c) {
     const u = (c.util ?? 0) / 100;
@@ -1017,6 +1063,7 @@ function ingest(d) {
     push(S.gpu.hist, g.util ?? 0);
     if (g.bw_gbps != null) S.gpu.bwPeak = g.bw_peak_gbps || Math.max(S.gpu.bwPeak, g.bw_gbps);
     push(S.gpu.bwHist, g.bw_gbps ?? g.mem_util ?? 0);
+    S.gpu.bwMax = g.bw_gbps != null ? S.gpu.bwPeak : 100;
   } else geigers.gpu.u = 0;
   if (!document.hidden) render();
 }
@@ -1027,7 +1074,7 @@ function render() {
   const compact = deck.classList.contains('compact');
   const c = d.cpu;
   if (c) {
-    put('cpu-name', c.name); $('cpu-name').title = c.name;
+    put('cpu-name', c.name);
     put('cpu-sub', c.cores ? `${c.cores} cores · ${c.threads} threads` : `${c.threads} threads`);
     put('cpu-clock', c.freq_mhz ? unit(c.freq_mhz / 1000, 'GHz', 2) : '—', true);
     put('cpu-power', unit(c.power_w, 'W', 0), true);
@@ -1039,7 +1086,6 @@ function render() {
       put('cpu-threads-cap', `${pc.filter(v => v > 50).length} of ${pc.length} above 50%`);
     }
     put('cpu-peak', `peak ${Math.round(Math.max(...S.cpu.hist))}%`);
-    drawSpark($(compact ? 'cpu-hspark' : 'cpu-spark'), S.cpu.hist, 100, 'cpu');
     renderProcs('cpu', c.procs, 'mem_mb', 'No process data.', compact);
   }
 
@@ -1050,7 +1096,7 @@ function render() {
     put('gpu-sub', '—');
     return;
   }
-  put('gpu-name', g.name); $('gpu-name').title = g.name;
+  put('gpu-name', g.name);
   const sub = [];
   if (g.vram_total_mb) sub.push(`${Math.round(g.vram_total_mb / 1024)} GB`);
   if (g.bus_width) sub.push(`${g.bus_width}-bit bus`);
@@ -1064,7 +1110,6 @@ function render() {
     putWidth('gpu-vram-bar', g.vram_used_mb / g.vram_total_mb);
   }
   put('gpu-peak', `peak ${Math.round(Math.max(...S.gpu.hist))}%`);
-  drawSpark($(compact ? 'gpu-hspark' : 'gpu-spark'), S.gpu.hist, 100, 'gpu');
   if (compact) return;
 
   if (g.bw_gbps != null) {
@@ -1078,7 +1123,6 @@ function render() {
     put('gpu-bw-peak', '');
     put('gpu-bw-note', 'Memory-controller busy. Pass --amd-peak-bw for GB/s');
   }
-  drawSpark($('gpu-bw-spark'), S.gpu.bwHist, g.bw_gbps != null ? S.gpu.bwPeak : 100, 'gpu');
   renderProcs('gpu', g.procs, 'vram_mb', 'No processes are using the GPU.', compact);
 }
 
@@ -1088,13 +1132,33 @@ function renderProcs(key, procs, memKey, emptyText, compact) {
   const top = procs[0];
   put(`${key}-proc-cap`, top ? `${top.name} · ${fmt(top.util)}%` : '');
   if (compact || !$(`${key}-fold`).open) return;   // folded: only the summary line is visible
-  put(`${key}-procs`, procs.length ? procs.map(p => `
-    <tr><td class="name" title="${esc(p.name)}">${esc(p.name)}</td>
-    <td class="n">${p.pid}</td>
-    <td class="n u"><span>${fmt(p.util)}%</span><i class="b" style="width:${clamp(p.util / 100) * 100}%"></i></td>
-    <td class="n">${mem(p[memKey] || 0)}</td></tr>`).join('')
-    : `<tr class="empty"><td colspan="4">${emptyText}</td></tr>`, true);
+  const body = $(`${key}-procs`), rows = procRows[key];
+  if (!procs.length) {
+    rows.length = 0;
+    body.innerHTML = `<tr class="empty"><td colspan="4">${emptyText}</td></tr>`;
+    return;
+  }
+  if (!rows.length) body.textContent = '';
+  while (rows.length < procs.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td class="name clip"><span class="run"></span></td><td class="n"></td><td class="n u"><span></span><i class="b"></i></td><td class="n"></td>';
+    const td = tr.children;
+    rows.push({ tr, name: td[0], pid: td[1], util: td[2].firstChild, bar: td[2].lastChild, mem: td[3], v: {} });
+    clipRO.observe(td[0]);
+    body.appendChild(tr);
+  }
+  while (rows.length > procs.length) rows.pop().tr.remove();
+  procs.forEach((p, i) => {
+    const r = rows[i], v = r.v;
+    if (v.name !== p.name) { v.name = p.name; r.name.firstChild.textContent = p.name; r.name.title = p.name; toFit.add(r.name); }
+    const pid = String(p.pid), util = `${fmt(p.util)}%`, m = mem(p[memKey] || 0), bar = `scaleX(${clamp(p.util / 100).toFixed(3)})`;
+    if (v.pid !== pid) r.pid.textContent = v.pid = pid;
+    if (v.util !== util) r.util.textContent = v.util = util;
+    if (v.mem !== m) r.mem.textContent = v.mem = m;
+    if (v.bar !== bar) r.bar.style.transform = v.bar = bar;
+  });
 }
+const procRows = { cpu: [], gpu: [] };
 
 /* ---------- animation loop: 30 fps, and each part redraws only when something changed */
 const FRAME_MS = 1000 / 30;
@@ -1114,6 +1178,15 @@ function frame(t) {
     geigers[k].draw(now);
   }
   if (!deck.classList.contains('compact')) { cores.step(dt); cores.draw(); }
+  const f = clamp((t - sampleAt) / sampleMs);
+  for (const [canvas, spec] of sparks) {
+    const sz = sizes.get(canvas);
+    if (!sz || sz.w < 2) continue;
+    if (spec.drawnAt === f && spec.drawnLen === spec.data.length && !stale.has(canvas)) continue;   // at rest until the next sample
+    stale.delete(canvas); spec.drawnAt = f; spec.drawnLen = spec.data.length;
+    drawSpark(canvas, spec, f);
+  }
+  if (toFit.size) fitClips();
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { last = performance.now(); render(); } });
 

@@ -3,6 +3,8 @@
 
 Run:  python3 backend/pcmeter.py --open
 Then the UI lives at http://127.0.0.1:8765 and the raw stream at /stream (Server-Sent Events).
+With --app (what the desktop shortcut uses) it opens its own window, reuses a copy that is
+already running, and quits once its last window has been closed for a while.
 
 Sources
   CPU    psutil (all platforms); RAPL package power on Linux when readable.
@@ -14,9 +16,12 @@ import json
 import os
 import platform
 import re
+import shutil
 import socket
 import subprocess
+import sys
 import threading
+import urllib.request
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,7 +34,9 @@ try:
 except ImportError:
     pynvml = None
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+__version__ = "0.1.0"
+# A PyInstaller build unpacks the web UI next to the code in sys._MEIPASS.
+WEB_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "web"
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 
@@ -500,6 +507,8 @@ def make_handler(telemetry):
             path = self.path.split("?", 1)[0]
             if path == "/stream":
                 self._stream()
+            elif path == "/health":
+                self._send(b"pcmeter", "text/plain")
             elif path == "/snapshot":
                 telemetry.attach(1)
                 try:
@@ -541,6 +550,70 @@ def make_handler(telemetry):
     return Handler
 
 
+# ---------------------------------------------------------------- app mode
+
+CHROMIUM_COMMANDS = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+                     "brave-browser", "brave", "microsoft-edge", "vivaldi")
+CHROMIUM_FLATPAKS = ("com.google.Chrome", "org.chromium.Chromium", "com.brave.Browser",
+                     "com.microsoft.Edge", "com.vivaldi.Vivaldi",
+                     "io.github.ungoogled_software.ungoogled_chromium")
+
+
+def _clean_env():
+    """The environment for launching other programs, minus the libraries a PyInstaller build injects."""
+    env = os.environ.copy()
+    if "LD_LIBRARY_PATH_ORIG" in env:
+        env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH_ORIG"]
+    elif getattr(sys, "frozen", False):
+        env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
+def _spawn(cmd):
+    subprocess.Popen(cmd, env=_clean_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def open_window(url):
+    """A chromeless app window from any Chromium-based browser (native or Flatpak), else the default browser."""
+    app = [f"--app={url}", "--window-size=900,1040"]
+    for cmd in CHROMIUM_COMMANDS:
+        exe = shutil.which(cmd)
+        if exe:
+            return _spawn([exe, *app])
+    if shutil.which("flatpak"):
+        roots = (Path("/var/lib/flatpak/app"), Path.home() / ".local/share/flatpak/app")
+        for ref in CHROMIUM_FLATPAKS:
+            if any((root / ref).exists() for root in roots):
+                return _spawn(["flatpak", "run", ref, *app])
+    opener = shutil.which("xdg-open") or shutil.which("open")
+    if opener:
+        return _spawn([opener, url])
+    webbrowser.open(url)
+
+
+def running_copy(host, port):
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/health", timeout=1) as r:
+            return r.read() == b"pcmeter"
+    except OSError:
+        return False
+
+
+def quit_when_closed(telemetry, server, grace):
+    """Stop once no window has been connected for `grace` seconds (longer before the first one arrives)."""
+    seen, idle_since = False, time.monotonic()
+    while True:
+        time.sleep(1)
+        if telemetry.clients > 0:
+            seen, idle_since = True, None
+            continue
+        idle_since = idle_since or time.monotonic()
+        if time.monotonic() - idle_since > (grace if seen else max(grace, 90)):
+            server.shutdown()
+            return
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1")
@@ -548,16 +621,32 @@ def main():
     ap.add_argument("--interval", type=float, default=0.5, help="seconds between samples")
     ap.add_argument("--amd-peak-bw", type=float, help="AMD peak VRAM bandwidth in GB/s (sysfs does not expose it)")
     ap.add_argument("--open", action="store_true", help="open the UI in a browser")
+    ap.add_argument("--app", action="store_true",
+                    help="open in an app window, reuse a running copy, quit after the last window closes")
+    ap.add_argument("--idle-exit", type=float, default=20, metavar="SECONDS",
+                    help="with --app, how long to wait after the last window closes (default 20)")
+    ap.add_argument("--version", action="version", version=f"PCmeter {__version__}")
     args = ap.parse_args()
 
+    if args.app and running_copy(args.host, args.port):
+        open_window(f"http://{args.host}:{args.port}/")
+        return
     telemetry = Telemetry(args.interval, args.amd_peak_bw)
-    threading.Thread(target=telemetry.run, daemon=True).start()
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(telemetry))
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), make_handler(telemetry))
+    except OSError:
+        if not args.app:
+            raise
+        server = ThreadingHTTPServer((args.host, 0), make_handler(telemetry))   # port taken by something else
     server.daemon_threads = True
-    url = f"http://{args.host}:{args.port}/"
+    url = f"http://{args.host}:{server.server_address[1]}/"
+    threading.Thread(target=telemetry.run, daemon=True).start()
     gpu_names = ", ".join(g.name for g in telemetry.gpus) or "none found"
-    print(f"PCmeter on {url}\n  CPU: {telemetry.cpu.name}\n  GPU: {gpu_names}")
-    if args.open:
+    print(f"PCmeter {__version__} on {url}\n  CPU: {telemetry.cpu.name}\n  GPU: {gpu_names}", flush=True)
+    if args.app:
+        threading.Thread(target=quit_when_closed, args=(telemetry, server, args.idle_exit), daemon=True).start()
+        open_window(url)
+    elif args.open:
         webbrowser.open(url)
     try:
         server.serve_forever()
