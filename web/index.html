@@ -1319,8 +1319,9 @@ function ingest(d) {
     push(S.gpu.bwHist, g.bw_gbps ?? g.mem_util ?? 0);
     if (g.bw_gbps != null) {
       // The graph scales to recent traffic, not the card's peak (960 GB/s on an RTX 5080 would
-      // flatten everyday traffic into a line). It grows at once and shrinks slowly.
-      const target = niceCeil(Math.max(.05, Math.max(...S.gpu.bwHist) * 1.15));
+      // flatten everyday traffic into a line). It grows at once and shrinks slowly, and never
+      // drops below 0.5 GB/s, so the jitter left after the monitor baseline stays small.
+      const target = niceCeil(Math.max(.5, Math.max(...S.gpu.bwHist) * 1.15));
       S.gpu.bwMax = !S.gpu.bwMax || target > S.gpu.bwMax ? target : Math.max(target, S.gpu.bwMax * .97);
     } else S.gpu.bwMax = 100;
   } else geigers.gpu.u = 0;
@@ -1377,13 +1378,15 @@ function render() {
     put('gpu-bw-unit', r.u);
     putWidth('gpu-bw-bar', g.bw_gbps / S.gpu.bwMax);
     put('gpu-bw-peak', g.bw_peak_gbps ? `peak ${rateText(g.bw_peak_gbps)}` : '');
-    put('gpu-bw-note', `graph and bar to ${rateText(S.gpu.bwMax)}`);
+    put('gpu-bw-note', `graph and bar to ${rateText(S.gpu.bwMax)}` +
+      (g.bw_display_gbps > .01 ? ` · monitor refresh (${rateText(g.bw_display_gbps)}) not counted` : ''));
   } else {
     put('gpu-bw', g.mem_util == null ? '—' : `${fmt(g.mem_util)}%`);
     put('gpu-bw-unit', '');
     putWidth('gpu-bw-bar', (g.mem_util ?? 0) / 100);
     put('gpu-bw-peak', '');
-    put('gpu-bw-note', 'Memory-controller busy. Pass --amd-peak-bw for GB/s');
+    put('gpu-bw-note', 'Memory-controller busy' +
+      (g.mem_util_display > .05 ? `, monitor refresh (${fmt(g.mem_util_display)}%) not counted` : '') + '. Pass --amd-peak-bw for GB/s');
   }
   renderProcs('gpu', g.procs, 'vram_mb', 'No processes are using the GPU.', compact);
 }
@@ -1577,7 +1580,7 @@ function demo() {
         name: 'NVIDIA GeForce RTX 4080', vendor: 'NVIDIA', util: gu * 100, mem_util: mu * 100, temp: gtemp,
         clock_mhz: gu < .08 ? rnd(210, 420) : 2715 - gu * 180 + rnd(-15, 15),
         power_w: 18 + 290 * Math.pow(gu, 1.15), power_limit_w: 320, fan_pct: fan,
-        vram_used_mb: vram, vram_total_mb: 16376, bw_gbps: peak * mu, bw_peak_gbps: peak, bus_width: 256, procs: plist,
+        vram_used_mb: vram, vram_total_mb: 16376, bw_gbps: peak * mu, bw_display_gbps: 2.6, bw_peak_gbps: peak, bus_width: 256, procs: plist,
       }],
     };
   };

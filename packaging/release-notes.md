@@ -1,5 +1,9 @@
 PCmeter 1.0 is a CPU and GPU monitor that lives on your desktop: Vista-gadget-style dual dials (load with an inset temperature sub-dial), Geiger-counter activity strips with optional clicks, per-thread meters, VRAM throughput, and fold-out top-process lists, in eight skins (Glass, Matrix, Hive, Windows, macOS, Linux, Dark, White).
 
+## What's new in 1.0.1
+
+- **Monitor refresh no longer counts as GPU activity.** Your GPU re-reads every monitor's image from VRAM on each refresh, which is a few GB/s with several high-resolution screens even when nothing runs. PCmeter now learns that baseline while the GPU's 3D and compute engines are idle and leaves it out of the VRAM throughput number, its graph and the activity counter, so an idle desktop reads zero. The card notes how much it set aside, for example "monitor refresh (2.6 GB/s) not counted".
+
 ## What's new in 1.0
 
 - **Desktop gadgets.** The CPU and GPU cards are separate frameless, translucent windows with the desktop blurred behind them, and no outer window. Drag a card anywhere, drag its side edges to resize it, and hover it for its menu and dismiss buttons. On KDE Plasma they return to where you left them and stay off the taskbar.

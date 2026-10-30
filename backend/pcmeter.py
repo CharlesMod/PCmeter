@@ -14,6 +14,7 @@ Sources
   AMD    amdgpu sysfs + /proc/<pid>/fdinfo on Linux.
 """
 import argparse
+from collections import deque
 import json
 import os
 import platform
@@ -36,7 +37,7 @@ try:
 except ImportError:
     pynvml = None
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 # A PyInstaller build unpacks the web UI next to the code in sys._MEIPASS.
 WEB_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "web"
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -336,6 +337,7 @@ class NvidiaGpu:
             # Memory-controller busy time x bandwidth at the current memory clock.
             "bw_gbps": bw_now * mem_util / 100 if bw_now is not None and mem_util is not None else None,
             "bw_peak_gbps": self._bandwidth(self.max_mem_clock),
+            "bw_capacity_gbps": bw_now,
             "bus_width": self.bus_width,
             "procs": self.procs,
         }
@@ -443,6 +445,7 @@ class AmdGpu:
             "vram_total_mb": total / 2**20 if total else None,
             "bw_gbps": self.peak_bw * mem_util / 100 if self.peak_bw and mem_util is not None else None,
             "bw_peak_gbps": self.peak_bw,
+            "bw_capacity_gbps": self.peak_bw,
             "bus_width": None,
             "procs": self.procs,
         }
@@ -494,11 +497,58 @@ def detect_gpus(amd_peak_bw=None):
 
 # ---------------------------------------------------------------- server
 
+class DisplayBaseline:
+    """VRAM traffic spent refreshing the monitors (scanout), so it can be left out of the activity.
+
+    The display engine re-reads every frame buffer on every refresh whether or not anything runs,
+    which is several GB/s with a few high-resolution monitors. It does not use the 3D or compute
+    engines, so the baseline is learned only from samples where those are near idle: the 90th
+    percentile of the last 10 minutes of such samples, which brings an idle desktop
+    to zero without its jitter showing. With no idle samples (a long game) the last value is kept.
+    """
+
+    IDLE_UTIL = 15      # GPU core % at or below which a sample counts as idle
+    WINDOW = 600.0      # seconds of idle samples to learn from
+    MIN_SAMPLES = 6
+
+    def __init__(self):
+        self.samples = deque()
+        self.value = 0.0
+
+    def update(self, util, traffic):
+        now = time.monotonic()
+        if util is not None and util <= self.IDLE_UTIL:
+            self.samples.append((now, traffic))
+        while self.samples and now - self.samples[0][0] > self.WINDOW:
+            self.samples.popleft()
+        if len(self.samples) >= self.MIN_SAMPLES:
+            ordered = sorted(v for _, v in self.samples)
+            self.value = ordered[len(ordered) * 9 // 10]
+        return self.value
+
+
+def subtract_display(g, baseline):
+    """Report memory traffic net of the monitor-refresh baseline; the totals stay alongside."""
+    capacity = g.pop("bw_capacity_gbps", None)
+    if g.get("bw_gbps") is not None:
+        total = g["bw_gbps"]
+        base = baseline.update(g.get("util"), total)
+        g.update(bw_total_gbps=total, bw_display_gbps=base, bw_gbps=max(0.0, total - base))
+        if capacity:
+            g["mem_util"] = min(100.0, g["bw_gbps"] / capacity * 100)
+    elif g.get("mem_util") is not None:
+        total = g["mem_util"]
+        base = baseline.update(g.get("util"), total)
+        g.update(mem_util_total=total, mem_util_display=base, mem_util=max(0.0, total - base))
+    return g
+
+
 class Telemetry:
     def __init__(self, interval, amd_peak_bw):
         self.interval = interval
         self.cpu = CpuSampler()
         self.gpus = detect_gpus(amd_peak_bw)
+        self.baselines = [DisplayBaseline() for _ in self.gpus]
         self.host = socket.gethostname()
         self.latest = None
         self.cond = threading.Condition()
@@ -518,9 +568,9 @@ class Telemetry:
             self.watched.wait()   # no window open: sleep instead of sampling
             started = time.monotonic()
             gpus = []
-            for gpu in self.gpus:
+            for gpu, baseline in zip(self.gpus, self.baselines):
                 try:
-                    gpus.append(gpu.sample())
+                    gpus.append(subtract_display(gpu.sample(), baseline))
                 except Exception as exc:  # one flaky device should not stop the stream
                     gpus.append({"name": gpu.name, "vendor": gpu.vendor, "error": str(exc)})
             snapshot = json.dumps({
