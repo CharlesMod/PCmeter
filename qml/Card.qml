@@ -36,6 +36,8 @@ Item {
     property real vramFrac: 0
     property var cores: []                   // per-thread load, 0..1; the bars glide to it
     property var peaks: []
+    property string limitTerm: "LOAD"
+    property bool throttled: false
     property real loadT: 0                   // dial targets, 0..1
     property real tempT: 0
     property string threadsCap: "—"
@@ -87,12 +89,14 @@ Item {
                      gpu: g0 && typeof g0.temp === "number" ? g0.temp : null }
             fanOn = d.fan && typeof d.fan === "object" ? !!d.fan.override : undefined
             histT = host.trange <= 120 ? (d.t || 0) : (d.hist_t || 0)
+            var lm = c.limit || {}
+            limitTerm = lm.term || "LOAD"; throttled = !!lm.throttled
             loadT = u; tempC = tc; tempT = tnorm(tc); geiger.u = ur
             nameText = c.name || "—"
             subText = c.cores ? c.cores + " cores · " + c.threads + " threads" : c.threads + " threads"
             r.a = [c.freq_mhz ? F.fmt(c.freq_mhz / 1000, 2) : "—", c.freq_mhz ? "GHz" : ""]
-            r.b = [F.fmt(c.power_w, 0), c.power_w === null || c.power_w === undefined ? "" : "W"]
-            r.c = [c.load ? c.load.map(function (x) { return x.toFixed(1) }).join(" ") : "—", ""]
+            r.b = [F.fmt(c.power_w, 1), c.power_w === null || c.power_w === undefined ? "" : lm.power_limit_w ? "/ " + F.fmt(lm.power_limit_w, 0) + " W" : "W"]
+            r.c = [F.fmt(c.util), "%"]                                    // raw utilisation; the dial shows the closest limit
             var pc = c.per_core || []
             if (pc.length) {
                 var bi = 0, hi = 0, k
@@ -118,6 +122,8 @@ Item {
                 nameText = gs[0] && gs[0].name || "No GPU detected"; subText = "—"; geiger.u = 0; return
             }
             var gu = (g.util_avg !== undefined ? g.util_avg : (g.util || 0)) / 100, gr = (g.util || 0) / 100, mu = (g.mem_util || 0) / 100
+            var gl = g.limit || {}
+            limitTerm = gl.term || "LOAD"; throttled = !!gl.throttled
             loadT = gu; tempC = g.temp; tempT = tnorm(g.temp); geiger.u = Math.max(gr, mu * .8)
             nameText = g.name
             var sub = []
@@ -287,6 +293,7 @@ Item {
                     id: dial
                     sk: root.sk; acc: root.acc; zones: root.zones; tempC: root.tempC
                     tmin: root.tmin; tmax: root.tmax; tag: root.isCpu && root.liq ? "LIQ" : ""
+                    label: root.limitTerm; throttled: root.throttled
                     x: inst.wide ? 0 : (inst.width - width) / 2
                     y: inst.wide ? (inst.height - height) / 2 : 0
                 }
@@ -299,7 +306,7 @@ Item {
                     spacing: 0
                     ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Clock" : "Core clock"; value: root.rows.a ? root.rows.a[0] : "—"; unit: root.rows.a ? root.rows.a[1] : "" }
                     ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Package power" : "Board power"; value: root.rows.b ? root.rows.b[0] : "—"; unit: root.rows.b ? root.rows.b[1] : "" }
-                    ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Load avg" : "Fan"; value: root.rows.c ? root.rows.c[0] : "—"; unit: root.rows.c ? root.rows.c[1] : "" }
+                    ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Utilisation" : "Fan"; value: root.rows.c ? root.rows.c[0] : "—"; unit: root.rows.c ? root.rows.c[1] : "" }
                     ReadRow {
                         width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Busiest thread" : "VRAM"
                         meter: !root.isCpu; frac: root.vramFrac; glide: root.burst

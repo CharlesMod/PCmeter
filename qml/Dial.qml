@@ -18,6 +18,8 @@ Item {
     property real tmax: 100
     property string tag: ""         // source tag under the reading ("LIQ" for coolant)
     property int glideMs: 700
+    property string label: "LOAD"   // the limiting term: POWER, THERMAL or LOAD
+    property bool throttled: false  // the package throttled in the last few seconds
     width: 176; height: 176
 
     readonly property real a0: 0.75 * Math.PI
@@ -72,8 +74,6 @@ Item {
             }
             ctx.lineCap = "round"; ctx.lineWidth = 4
             ctx.beginPath(); ctx.arc(cx, cy, dial.ra, dial.a0, dial.a0 + dial.sweep); ctx.strokeStyle = fgc(.06); ctx.stroke()
-            ctx.font = "600 8px '" + sk.ui + "'"; ctx.textBaseline = "alphabetic"
-            ctx.fillText("LOAD", cx, cy - rad * .26)
             ctx.beginPath(); ctx.arc(dial.sx, dial.sy, dial.sr, 0, Math.PI * 2)
             ctx.fillStyle = Skins.css(sk.disc); ctx.fill(); ctx.strokeStyle = fgc(.14); ctx.lineWidth = 1; ctx.stroke()
             var z = dial.zones, bands = [[dial.tmin, z[0], sk.cool], [z[0], z[1], sk.warn], [z[1], dial.tmax, sk.hot]]
@@ -172,6 +172,24 @@ Item {
     property real seededU: 0
     property real arcFrom: 0
     property real arcT0: 0
+
+    // which limit the needle is measuring
+    Text {
+        text: dial.label
+        font.family: dial.sk ? dial.sk.ui : ""; font.pixelSize: 8; font.weight: Font.DemiBold
+        color: dial.sk ? Skins.qt(dial.label === "LOAD" ? dial.sk.ink3 : dial.sk.ink2) : "white"
+        x: dial.cx - width / 2; y: dial.cy - dial.rad * .26 - baselineOffset
+    }
+    Rectangle {
+        visible: dial.throttled && dial.sk
+        x: 2; y: 2; width: thr.width + 8; height: thr.height + 2; radius: height / 2
+        color: "transparent"; border.width: 1; border.color: dial.sk ? Skins.qt(dial.sk.hot) : "red"
+        Text {
+            id: thr; text: "THROTTLED"; anchors.centerIn: parent
+            font.family: dial.sk ? dial.sk.ui : ""; font.pixelSize: 7; font.weight: Font.DemiBold
+            color: dial.sk ? Skins.qt(dial.sk.hot) : "red"
+        }
+    }
 
     // readout: the big percentage, centred with its unit
     Text {

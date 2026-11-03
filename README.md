@@ -86,6 +86,15 @@ open `web/index.html` directly from disk.
   load average, package power (RAPL; often needs root to read). A coolant/radiator temperature
   (hwmon: Kraken, D5 Next, Aquacomputer, ...; else `liquidctl status`) is reported as
   `coolant_temp` and preferred for the dial when present.
+- **The dial** shows how close the chip is to whichever limit it meets first, the largest of up to three
+  terms, each 0-100 %: POWER (package watts / PL1 from `intel-rapl` `constraint_*_power_limit_uw`; watts from RAPL,
+  else fanctl's `inputs.power`), THERMAL ((die - 40 C) / (TjMax - 40 C), TjMax from hwmon `temp*_crit`, else 100 C; 40 C
+  is about an idle die, 100 % is the throttle point) and LOAD (utilisation). A missing source drops its term. The
+  dial is labelled with the winning term and averaged over 3 s. THROTTLED lights while the package throttle counter
+  (`thermal_throttle/package_throttle_total_time_ms`) rose within the last 3 s. The NVIDIA dial does the same with
+  power / enforced limit, temperature vs the slowdown threshold and NVML's throttle reasons. The snapshot carries it
+  as `limit` (`value`, `term`, `terms`, `throttled`, `power_limit_w`, `temp_limit`). The readout rows show package
+  power as `75.4 / 120 W` and raw utilisation separately.
 - **NVIDIA** (NVML): load, temperature, clocks, power, fan, VRAM, top 10 processes
   with per-process load and VRAM.
 - **AMD** (amdgpu sysfs): the same, with per-process data from `/proc/<pid>/fdinfo`.

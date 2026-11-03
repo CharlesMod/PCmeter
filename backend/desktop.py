@@ -125,16 +125,22 @@ class Feed(QObject):
             q.popleft()
         return sum(v for _, v in q) / len(q)
 
+    @staticmethod
+    def _dial_value(d):
+        """What the dial shows: the closest limit (see pcmeter.limit_info), else plain utilisation."""
+        v = (d.get("limit") or {}).get("value")
+        return d["util"] if v is None else v
+
     @Slot(object)
     def _store(self, snap):
         now = time.monotonic()
         snap = dict(snap)                          # the dial's smoothed load rides along as util_avg
         cpu = snap.get("cpu")
         if cpu and cpu.get("util") is not None:
-            snap["cpu"] = cpu = dict(cpu, util_avg=self._smooth("cpu", cpu["util"], now))
+            snap["cpu"] = cpu = dict(cpu, util_avg=self._smooth("cpu", self._dial_value(cpu), now))
         gpus = snap.get("gpus")
         if gpus:
-            snap["gpus"] = [dict(g, util_avg=self._smooth("gpu%d" % i, g["util"], now))
+            snap["gpus"] = [dict(g, util_avg=self._smooth("gpu%d" % i, self._dial_value(g), now))
                             if g.get("util") is not None else g for i, g in enumerate(gpus)]
         if self.history is not None:               # a new 5 s temperature row: the Temps tab reloads
             with self.history.lock:

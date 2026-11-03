@@ -38,7 +38,7 @@ try:
 except ImportError:
     pynvml = None
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 # A PyInstaller build unpacks the web UI next to the code in sys._MEIPASS.
 WEB_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "web"
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -668,6 +668,9 @@ class NvidiaGpu:
         self.bus_width = self._try(n.nvmlDeviceGetMemoryBusWidth)
         self.max_mem_clock = self._try(n.nvmlDeviceGetMaxClockInfo, n.NVML_CLOCK_MEM)
         self.power_limit = self._try(n.nvmlDeviceGetEnforcedPowerLimit)
+        self.temp_slowdown = self._try(n.nvmlDeviceGetTemperatureThreshold, n.NVML_TEMPERATURE_THRESHOLD_SLOWDOWN)
+        self.throttle_mask = sum(getattr(n, "nvmlClocksThrottleReason" + r, 0) for r in
+                                 ("SwPowerCap", "HwSlowdown", "SwThermalSlowdown", "HwThermalSlowdown", "HwPowerBrakeSlowdown"))
         self.last_proc_ts = 0
         self.last_mem_ts = 0
         self.procs = []
@@ -722,7 +725,9 @@ class NvidiaGpu:
         rates = self._try(n.nvmlDeviceGetUtilizationRates)
         mem = self._try(n.nvmlDeviceGetMemoryInfo) if full else None
         mem_clock = self._try(n.nvmlDeviceGetClockInfo, n.NVML_CLOCK_MEM)
-        power = self._try(n.nvmlDeviceGetPowerUsage) if full else None
+        power = self._try(n.nvmlDeviceGetPowerUsage)       # the dial's POWER term needs it in the light path too
+        temp = self._try(n.nvmlDeviceGetTemperature, n.NVML_TEMPERATURE_GPU)
+        reasons = self._try(n.nvmlDeviceGetCurrentClocksThrottleReasons)
         now = time.monotonic()
         if procs and now >= self.next_proc_scan:
             self._scan_procs()
@@ -738,7 +743,11 @@ class NvidiaGpu:
             "vendor": self.vendor,
             "util": rates.gpu if rates else None,
             "mem_util": mem_util,
-            "temp": self._try(n.nvmlDeviceGetTemperature, n.NVML_TEMPERATURE_GPU),
+            "temp": temp,
+            "limit": limit_info(rates.gpu if rates else None, temp, self.temp_slowdown,
+                                power / 1000 if power is not None else None,
+                                self.power_limit / 1000 if self.power_limit else None,
+                                bool(reasons and reasons & self.throttle_mask)),
             "clock_mhz": self._try(n.nvmlDeviceGetClockInfo, n.NVML_CLOCK_GRAPHICS) if full else None,
             "power_w": power / 1000 if power is not None else None,
             "power_limit_w": self.power_limit / 1000 if self.power_limit else None,

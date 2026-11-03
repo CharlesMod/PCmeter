@@ -716,7 +716,7 @@ body.gauge .rs { display: none; }
           <dl class="readouts">
             <div class="row"><dt>Clock</dt><dd class="clip" id="cpu-clock"><span class="run">—</span></dd></div>
             <div class="row"><dt>Package power</dt><dd class="clip" id="cpu-power"><span class="run">—</span></dd></div>
-            <div class="row"><dt title="1, 5 and 15 minute load average">Load avg</dt><dd class="clip" id="cpu-loadavg"><span class="run">—</span></dd></div>
+            <div class="row"><dt title="Raw CPU utilisation; the dial shows whichever limit is closest">Utilisation</dt><dd class="clip" id="cpu-loadavg"><span class="run">—</span></dd></div>
             <div class="row"><dt>Busiest thread</dt><dd class="clip" id="cpu-busiest"><span class="run">—</span></dd></div>
             <div class="spark-wrap">
               <div class="cap"><span>Load, last 60 s</span><span id="cpu-peak">peak —</span></div>
@@ -961,8 +961,6 @@ function dialLayer(canvas, s, sc) {
   }
   ctx.lineCap = 'round'; ctx.lineWidth = 4;
   ctx.beginPath(); ctx.arc(g.cx, g.cy, g.ra, A0, A0 + SWEEP); ctx.strokeStyle = fg(.06); ctx.stroke();
-  ctx.font = `600 8px ${T.ui}`; ctx.fillStyle = C.ink3; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('LOAD', g.cx, g.cy - g.R * .26);
   ctx.beginPath(); ctx.arc(g.sx, g.sy, g.sr, 0, Math.PI * 2);
   ctx.fillStyle = T.disc; ctx.fill();
   ctx.strokeStyle = fg(.14); ctx.lineWidth = 1; ctx.stroke();
@@ -988,12 +986,22 @@ function sweptPointer(ctx, cx, cy, aFrom, aTo, r0, r1, w, glow) {
   for (let i = 0; i < n; i++) pointer(ctx, cx, cy, aFrom + (aTo - aFrom) * i / (n - 1), r0, r1, w, glow, i < n - 1);
   ctx.restore();
 }
-function drawDial(canvas, load, tNorm, tempC, acc, sc, loadFrom = load, tFrom = tNorm) {
+function drawDial(canvas, load, tNorm, tempC, acc, sc, loadFrom = load, tFrom = tNorm, lim = {}) {
   const s = fit(canvas);
   if (!s) return;
   const { ctx, w, h } = s, g = dialGeometry(w, h);
   const zones = sc.zones;
   ctx.drawImage(dialLayer(canvas, s, sc), 0, 0, w, h);
+  // which limit the needle measures (POWER, THERMAL or LOAD) and the throttle flag
+  ctx.font = `600 8px ${T.ui}`; ctx.fillStyle = C.ink3;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(lim.term || 'LOAD', g.cx, g.cy - g.R * .26);
+  if (lim.throttled) {
+    ctx.font = `600 7px ${T.ui}`; const tw = ctx.measureText('THROTTLED').width + 8;
+    ctx.beginPath(); ctx.roundRect(2, 2, tw, 12, 6); ctx.strokeStyle = C.hot; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = C.hot; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText('THROTTLED', 6, 8.5);
+    ctx.textAlign = 'center';
+  }
 
   // ticks lit up to the needle
   const lit = Math.floor(clamp(load) * 50 + 0.05);
@@ -1542,13 +1550,19 @@ tempsFetch();
 
 
 /* New data: update targets and history now; the DOM only while the page is visible. */
+function demoLimit(util, temp, w, pl1, tj) {
+  const t = { POWER: Math.min(100, w / pl1 * 100), THERMAL: Math.max(0, Math.min(100, (temp - 40) / (tj - 40) * 100)), LOAD: util };
+  let term = 'POWER'; for (const k of ['THERMAL', 'LOAD']) if (t[k] > t[term]) term = k;
+  return { term, value: t[term], terms: t, throttled: temp >= tj - 1, power_limit_w: pl1, temp_limit: tj };
+}
 function ingest(d) {
   lastData = d;
   tempsPush(d);
   sampleAt = performance.now(); sampleMs = (d.interval || .5) * 1000;
   const c = d.cpu;
   if (c) {
-    const u = (c.util ?? 0) / 100;
+    const u = (c.limit?.value ?? c.util ?? 0) / 100;      // the dial: the closest of power, thermal and load
+    S.cpu.lim = { term: c.limit?.term, throttled: !!c.limit?.throttled };
     const liq = c.temp_source === 'coolant' && typeof c.coolant_temp === 'number';   // missing keys = old backend
     const sc = liq ? SC_LIQ : SC_DIE, tc = liq ? c.coolant_temp : c.temp;
     if (sc !== S.cpu.sc) { S.cpu.sc = sc; S.cpu.temp.x = S.cpu.temp.t = tc == null ? 0 : tempNorm(tc, sc); S.cpu.temp.v = 0; }   // snap on source change
@@ -1559,7 +1573,7 @@ function ingest(d) {
       : has(c.temp) != null ? `CPU temperature ${has(c.temp)} °C` : '';
     if (cd.getAttribute('aria-label') !== label) cd.setAttribute('aria-label', label);
     if (cd.title !== tip) cd.title = tip;
-    geigers.cpu.u = u;
+    geigers.cpu.u = (c.util ?? 0) / 100;
     if (c.per_core && c.per_core.length) cores.set(c.per_core);
     push(S.cpu.hist, c.util ?? 0);
   }
@@ -1567,7 +1581,9 @@ function ingest(d) {
   S.gpu.present = !!g;
   if (g) {
     const u = (g.util ?? 0) / 100, mu = (g.mem_util ?? 0) / 100;
-    S.gpu.load.t = u; S.gpu.tempC = g.temp; S.gpu.temp.t = g.temp == null ? 0 : tempNorm(g.temp, S.gpu.sc);
+    S.gpu.lim = { term: g.limit?.term, throttled: !!g.limit?.throttled };
+    S.gpu.load.t = g.limit?.value != null ? g.limit.value / 100 : u;
+    S.gpu.tempC = g.temp; S.gpu.temp.t = g.temp == null ? 0 : tempNorm(g.temp, S.gpu.sc);
     geigers.gpu.u = Math.max(u, mu * .8);
     push(S.gpu.hist, g.util ?? 0);
     if (g.bw_gbps != null) S.gpu.bwPeak = g.bw_peak_gbps || Math.max(S.gpu.bwPeak, g.bw_gbps);
@@ -1592,8 +1608,8 @@ function render() {
     put('cpu-name', c.name);
     put('cpu-sub', c.cores ? `${c.cores} cores · ${c.threads} threads` : `${c.threads} threads`);
     put('cpu-clock', c.freq_mhz ? unit(c.freq_mhz / 1000, 'GHz', 2) : '—', true);
-    put('cpu-power', unit(c.power_w, 'W', 0), true);
-    put('cpu-loadavg', c.load ? c.load.map(x => x.toFixed(1)).join(' ') : '—');
+    put('cpu-power', c.power_w == null ? '—' : `${fmt(c.power_w, 1)}<small>${c.limit?.power_limit_w ? `/ ${fmt(c.limit.power_limit_w, 0)} W` : 'W'}</small>`, true);
+    put('cpu-loadavg', unit(c.util, '%', 0), true);
     const pc = c.per_core || [];
     if (pc.length) {
       let bi = 0; pc.forEach((v, i) => { if (v > pc[bi]) bi = i; });
@@ -1702,8 +1718,8 @@ function frame(t) {
     if (k === 'gpu' && !s.present) continue;
     const canvas = $(`${k}-dial`);
     const lf = s.load.x - s.load.v * shut, tf = s.temp.x - s.temp.v * shut;   // where the needles were when it opened
-    const key = `${s.load.x.toFixed(4)}|${lf.toFixed(4)}|${s.temp.x.toFixed(4)}|${tf.toFixed(4)}|${s.tempC == null ? '' : Math.round(s.tempC)}`;
-    if (key !== s.shown || stale.has(canvas)) { s.shown = key; stale.delete(canvas); drawDial(canvas, s.load.x, s.temp.x, s.tempC, ACC[k], s.sc, lf, tf); }
+    const key = `${s.load.x.toFixed(4)}|${lf.toFixed(4)}|${s.temp.x.toFixed(4)}|${tf.toFixed(4)}|${s.tempC == null ? '' : Math.round(s.tempC)}|${s.lim?.term}|${s.lim?.throttled}`;
+    if (key !== s.shown || stale.has(canvas)) { s.shown = key; stale.delete(canvas); drawDial(canvas, s.load.x, s.temp.x, s.tempC, ACC[k], s.sc, lf, tf, s.lim); }
     geigers[k].draw(now, shut);
   }
   if (!deck.classList.contains('compact')) { cores.step(dt, t); cores.draw(); }
@@ -1837,6 +1853,7 @@ function demo() {
         name: 'AMD Ryzen 9 7950X', cores: 16, threads: N, util: util * 100, per_core: core.map(v => v * 100),
         temp, freq_mhz: util < .05 ? rnd(3000, 3800) : (scene.single ? rnd(5600, 5700) : 5150 - util * 600 + rnd(-40, 40)),
         power_w: 32 + 195 * Math.pow(util, 1.1), load: la, procs: cpuProcs(util),
+        limit: demoLimit(util * 100, temp, 32 + 195 * Math.pow(util, 1.1), 120, 100),
       },
       gpus: [{
         name: 'NVIDIA GeForce RTX 4080', vendor: 'NVIDIA', util: gu * 100, mem_util: mu * 100, temp: gtemp,
