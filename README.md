@@ -35,7 +35,16 @@ again brings back any card you dismissed. On KDE Plasma (Wayland) the cards retu
 them. NVIDIA cards need the proprietary driver; AMD cards work out of the box.
 
 The gadgets are native Qt Quick (`qml/`, no browser engine). They draw with Qt's hardware renderer (OpenGL ES), at up to 24
-frames a second with film-style motion blur and only while something moves. `PCMETER_RENDER=cpu` switches to the software renderer for hosts with no usable GL.
+frames a second with film-style motion blur and only while something moves. By default each card is half the height of its screen's work area (the screen minus panels), so two stacked
+cards fill it, with the content scaled to fit; a width you set by dragging an edge is kept as saved, and the
+default follows a card to a screen of another size. A fresh start stacks the cards in one column at the right edge,
+processor on top.
+
+Rendering: `PCMETER_RENDER=cpu` switches to the software renderer for hosts with no usable GL. The default
+(`gpu`) uses OpenGL with Qt's basic render loop and `__GL_YIELD=USLEEP` (set unless you have set it), because the
+NVIDIA driver busy-waits in `eglSwapBuffers`: on an RTX 5080 under KWin Wayland the two cards cost about 11% of one core
+this way, against 28% with the threaded loop. `PCMETER_RENDER=threaded` restores the threaded loop and
+`PCMETER_RENDER=vulkan` uses the Vulkan backend; `QSG_RENDER_LOOP` and `QSG_RHI_BACKEND` still win if set.
 While the session is locked, the cards are hidden or all dismissed, the sampler sleeps on an event and
 nothing is drawn. The process lists are scanned every 5 s, and only while a card's list is open. `pcmeter --app --browser`
 opens the old single-page app window in Chrome, Chromium, Brave, Edge or Vivaldi instead.

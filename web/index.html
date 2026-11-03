@@ -1426,7 +1426,7 @@ function tempsWindow() {
   return { n, i0, tEnd, tStart, has, lead: has.liq ? 'liq' : has.die ? 'die' : has.gpu ? 'gpu' : null };
 }
 function tempsText() {
-  const D = tempsSrc(), w = tempsWindow(), f = v => v == null ? '—' : Math.round(v) + '°';
+  const D = tempsSrc(), w = tempsWindow(), f = v => v == null ? '—' : v.toFixed(1) + '°';
   const lastOf = k => { for (let i = D.t.length - 1; i >= 0; i--) if (D[k][i] != null) return D[k][i]; return null; };
   const parts = [];
   if (w) for (const [k, , lbl] of SERIES) if (w.has[k]) parts.push(`<span${k === 'liq' ? ' class="liq"' : ''}>${f(TH.live[k] ?? lastOf(k))}</span><small>${lbl}</small>`);
@@ -1435,10 +1435,10 @@ function tempsText() {
   if (!w || !w.lead) { put('t-cap', `Collecting, last ${lbl}`); put('t-max', ''); return; }
   const arr = D[w.lead]; let first = null, lastV = null;
   for (let i = w.i0; i <= w.n; i++) if (arr[i] != null) { if (first == null) first = arr[i]; lastV = arr[i]; }
-  const dl = Math.round(lastV - first);
-  put('t-cap', `${w.lead === 'liq' ? 'Coolant' : w.lead === 'die' ? 'Die' : 'GPU'}, last ${lbl} ${dl === 0 ? '±' : dl > 0 ? '+' : '−'}${Math.abs(dl)}°`);
+  const dl = Math.round((lastV - first) * 10) / 10;
+  put('t-cap', `${w.lead === 'liq' ? 'Coolant' : w.lead === 'die' ? 'Die' : 'GPU'}, last ${lbl} ${dl === 0 ? '±' : dl > 0 ? '+' : '−'}${Math.abs(dl).toFixed(1)}°`);
   let mx = null; for (let i = w.i0; i <= w.n; i++) if (D.die[i] != null && (mx == null || D.die[i] > mx)) mx = D.die[i];
-  put('t-max', mx == null ? '' : `die max ${Math.round(mx)}°`);
+  put('t-max', mx == null ? '' : `die max ${mx.toFixed(1)}°`);
 }
 function drawTemps(canvas) {
   const s = fit(canvas); if (!s) return;
@@ -1553,7 +1553,7 @@ function ingest(d) {
     const sc = liq ? SC_LIQ : SC_DIE, tc = liq ? c.coolant_temp : c.temp;
     if (sc !== S.cpu.sc) { S.cpu.sc = sc; S.cpu.temp.x = S.cpu.temp.t = tc == null ? 0 : tempNorm(tc, sc); S.cpu.temp.v = 0; }   // snap on source change
     S.cpu.load.t = u; S.cpu.tempC = tc; S.cpu.temp.t = tc == null ? 0 : tempNorm(tc, sc);
-    const cd = $('cpu-dial'), has = x => typeof x === 'number' ? Math.round(x) : null;
+    const cd = $('cpu-dial'), has = x => typeof x === 'number' ? x.toFixed(1) : null;
     const label = liq ? `CPU load and coolant temperature (${c.coolant_source || 'coolant'}) dial` : 'CPU load and temperature dial';
     const tip = liq ? (has(c.temp) != null ? `Coolant ${has(c.coolant_temp)} °C · CPU die ${has(c.temp)} °C` : `Coolant temperature (${c.coolant_source || 'coolant'}) ${has(c.coolant_temp)} °C`)
       : has(c.temp) != null ? `CPU temperature ${has(c.temp)} °C` : '';

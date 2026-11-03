@@ -47,6 +47,11 @@ MIN_ZOOM, MAX_ZOOM = 0.5, 3.0
 # The cards are drawn by Qt Quick. "gpu" (default) uses its hardware renderer (RHI: OpenGL or Vulkan): on
 # a real desktop it idles near 0.3% of a core. "cpu" (PCMETER_RENDER=cpu) is the software renderer, for
 # hosts with no usable GL (about 15% of a core when drawing a 4K card).
+#   "gpu" (default): OpenGL, Qt's basic render loop (both cards drawn from the GUI thread) and NVIDIA's
+#       usleep-based swap wait. Measured on an RTX 5080 / KWin Wayland, two cards at 60 fps each: threaded
+#       loop 857 ticks / 30 s (28%), + __GL_YIELD=USLEEP 636 (21%), Vulkan threaded 522 (17%),
+#       basic + USLEEP 348 (11.6%), Vulkan + basic 330 (11%). The render threads sit in eglSwapBuffers.
+#   "threaded": the threaded loop (a render thread per window); "vulkan": the Vulkan RHI backend.
 RENDER = os.environ.get("PCMETER_RENDER", "gpu")
 BURST_MS = int(os.environ.get("PCMETER_BURST", "0"))
 DEBUG = bool(os.environ.get("PCMETER_DEBUG"))
@@ -423,6 +428,9 @@ class Gadget(QObject):
             self.ctl.store.setValue(f"{self.key}/zoom", self.zoom)
 
     def _resized(self, *_):
+        if DEBUG:
+            print(f"[{self.key}] geometry x={self.x()} y={self.y()} {self.width()}x{self.height()} user={self.user}",
+                  file=sys.stderr, flush=True)
         self.update_blur()
         if self.isVisible():
             self.width_saved.start()
@@ -846,6 +854,12 @@ def run(start_sampler):
         # context shows up in nvidia-smi). Without them, windows are plain shared-memory buffers.
         os.environ["QT_WAYLAND_CLIENT_BUFFER_INTEGRATION"] = "none"
         os.environ["QT_XCB_GL_INTEGRATION"] = "none"
+    if RENDER != "cpu":
+        # set here, before Qt opens any GL context, and only where the user has not set them
+        os.environ.setdefault("__GL_YIELD", "USLEEP")
+        os.environ.setdefault("QSG_RENDER_LOOP", "threaded" if RENDER == "threaded" else "basic")
+        if RENDER == "vulkan":
+            os.environ.setdefault("QSG_RHI_BACKEND", "vulkan")
     QApplication.setApplicationName("PCmeter")
     QApplication.setOrganizationName("PCmeter")
     QApplication.setDesktopFileName(APP_ID)

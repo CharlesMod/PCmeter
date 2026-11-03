@@ -2,6 +2,10 @@
 // Number formatting and small helpers shared by the cards (ported from web/index.html).
 
 function clamp(v, a, b) { a = a === undefined ? 0 : a; b = b === undefined ? 1 : b; return Math.max(a, Math.min(b, v)) }
+// A temperature with one decimal ("55.5°"); the dial readouts and the chart axes stay whole numbers.
+function temp(v) { return v === null || v === undefined || isNaN(v) ? "—" : Number(v).toFixed(1) + "°" }
+// A signed change to one decimal: "+1.2°", "−0.4°", "±0.0°".
+function dtemp(d) { var r = Math.round(d * 10) / 10; return (r === 0 ? "±" : r > 0 ? "+" : "−") + Math.abs(r).toFixed(1) + "°" }
 function fmt(v, d) { return v === null || v === undefined || isNaN(v) ? "—" : Number(v).toFixed(d || 0) }
 
 // A byte rate (given in GB/s) in the unit that reads best: MB/s below 1 GB/s, GB/s from there up.

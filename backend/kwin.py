@@ -59,7 +59,10 @@ function setup(w) {
   w.keepAbove = ABOVE;
   place(w);
   // until the user moves it, keep the default stack in place while the card settles to its size
-  w.frameGeometryChanged.connect(function () { if (!saved[w.caption] && !w.move && !w.resize) place(w); });
+  // (never during or after a drag: a right-edge drag must leave the left edge where it is)
+  let touched = false;
+  w.interactiveMoveResizeStarted.connect(function () { touched = true; });
+  w.frameGeometryChanged.connect(function () { if (!touched && !saved[w.caption] && !w.move && !w.resize) place(w); });
   w.interactiveMoveResizeFinished.connect(function () {
     const g = w.frameGeometry;
     saved[w.caption] = [Math.round(g.x), Math.round(g.y)];

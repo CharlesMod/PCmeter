@@ -64,7 +64,7 @@ Item {
         return { n: n, i0: i0, tEnd: tEnd, tStart: tStart, has: has, lead: has.liq ? "liq" : has.die ? "die" : has.gpu ? "gpu" : "" }
     }
     function lastOf(k) { var A = arr(k); for (var i = A.length - 1; i >= 0; i--) if (A[i] !== null) return A[i]; return null }
-    function deg(v) { return v === null || v === undefined ? "—" : Math.round(v) + "°" }
+    function deg(v) { return F.temp(v) }
 
     // text: re-evaluated when the card sets `live` (per sample) or the history reloads
     readonly property var w: { rev; return win() }
@@ -83,14 +83,13 @@ Item {
         if (!w || !w.lead) return "Collecting, last " + rangeLabel
         var A = arr(w.lead), first = null, last = null
         for (var i = w.i0; i <= w.n; i++) if (A[i] !== null) { if (first === null) first = A[i]; last = A[i] }
-        var dl = Math.round(last - first)
-        return (w.lead === "liq" ? "Coolant" : w.lead === "die" ? "Die" : "GPU") + ", last " + rangeLabel + " " + (dl === 0 ? "±" : dl > 0 ? "+" : "−") + Math.abs(dl) + "°"
+        return (w.lead === "liq" ? "Coolant" : w.lead === "die" ? "Die" : "GPU") + ", last " + rangeLabel + " " + F.dtemp(last - first)
     }
     readonly property string maxText: {
         if (!w || !w.lead) return ""
         var mx = null
         for (var i = w.i0; i <= w.n; i++) if (aDie[i] !== null && (mx === null || aDie[i] > mx)) mx = aDie[i]
-        return mx === null ? "" : "die max " + Math.round(mx) + "°"
+        return mx === null ? "" : "die max " + F.temp(mx)
     }
 
     Column {
