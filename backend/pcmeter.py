@@ -123,6 +123,177 @@ def cpu_temp():
     return None
 
 
+# ---------------------------------------------------------------- coolant (radiator / liquid) temperature
+
+COOLANT_RE = re.compile(r"coolant|liquid|water", re.I)
+# hwmon chips of AIO coolers and pump controllers whose temp1 is the liquid temperature.
+COOLANT_CHIPS = ("kraken2", "x53", "z53", "kraken2023", "kraken2023elite", "d5next", "aquaero",
+                 "octo", "quadro", "highflownext", "leakshield", "rog_ryujin", "waterforce")
+COOLANT_RANGE = (5.0, 90.0)   # anything outside this is a dead or bogus sensor
+HWMON_ROOT = "/sys/class/hwmon"
+
+
+def _plausible(c):
+    return c is not None and COOLANT_RANGE[0] <= c <= COOLANT_RANGE[1]
+
+
+def find_coolant_file(root=HWMON_ROOT):
+    """(input file, source name) of a hwmon coolant sensor, or None. A labelled sensor wins over a known chip's temp1."""
+    chip_fallback = None
+    try:
+        hwmons = sorted(Path(root).glob("hwmon*"))
+    except OSError:
+        return None
+    for hw in hwmons:
+        name = _read(hw / "name") or ""
+        for lf in sorted(hw.glob("temp*_label")):
+            if COOLANT_RE.search(_read(lf) or ""):
+                inp = Path(str(lf).replace("_label", "_input"))
+                if _plausible((_read(inp, int) or 0) / 1000 if inp.exists() else None):
+                    return inp, name or "hwmon"
+        inp = hw / "temp1_input"
+        if (chip_fallback is None and name in COOLANT_CHIPS and not (hw / "temp1_label").exists()
+                and inp.exists() and _plausible((_read(inp, int) or 0) / 1000)):
+            chip_fallback = (inp, name)
+    return chip_fallback
+
+
+def parse_liquidctl_status(text):
+    """(temperature C, device description) from `liquidctl status --json` output, or None."""
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    for dev in data if isinstance(data, list) else []:
+        for item in dev.get("status") or []:
+            if "liquid temperature" in str(item.get("key", "")).lower() and item.get("unit", "°C") in ("°C", "C"):
+                try:
+                    value = float(item["value"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                return value, str(dev.get("description") or "")
+    return None
+
+
+class LiquidctlPoller:
+    """Background reader of the liquid temperature through the liquidctl CLI.
+
+    SAFETY: this only ever runs `liquidctl status`. It must never call initialize/set (or anything
+    else that writes), because that would change pump, fan or LED settings on the user's cooler.
+    """
+    MAX_AGE = 20.0      # a reading older than this counts as no reading
+    PERIOD = 5.0
+    BACKOFF_PERIOD = 60.0
+    BACKOFF_AFTER = 5   # consecutive failures before slowing down
+
+    def __init__(self, path, clock=time.monotonic):
+        self.path = path
+        self.clock = clock
+        self.value = None       # (temp, description, timestamp)
+        self.failures = 0
+        self.timeout = 5.0
+
+    def poll_once(self):
+        try:
+            out = subprocess.run([self.path, "status", "--json"], capture_output=True, text=True,
+                                 timeout=self.timeout, check=True).stdout
+            parsed = parse_liquidctl_status(out)
+            if parsed is None:
+                raise ValueError("no liquid temperature in output")
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            self.failures += 1
+            if self.failures == 1:
+                print(f"pcmeter: liquidctl status failed: {exc}", file=sys.stderr)
+            return False
+        self.failures = 0
+        self.value = (parsed[0], parsed[1], self.clock())
+        return True
+
+    def delay(self):
+        return self.BACKOFF_PERIOD if self.failures >= self.BACKOFF_AFTER else self.PERIOD
+
+    def run(self):
+        while True:
+            self.poll_once()
+            time.sleep(self.delay())
+
+    def start(self):
+        threading.Thread(target=self.run, daemon=True, name="liquidctl").start()
+
+    def latest(self):
+        """(temp, source) from the last good poll, or (None, None) if there is none or it is stale."""
+        v = self.value
+        if v and self.clock() - v[2] <= self.MAX_AGE and _plausible(v[0]):
+            return v[0], "liquidctl: " + v[1] if v[1] else "liquidctl"
+        return None, None
+
+
+def pick_temp_source(coolant_temp, preference="auto"):
+    """Which temperature the dial should show: "coolant" or "cpu"."""
+    return "coolant" if coolant_temp is not None and preference != "cpu" else "cpu"
+
+
+class CoolantSensor:
+    RESCAN = 60.0
+
+    def __init__(self, preference="auto", liquidctl="auto", hwmon_root=HWMON_ROOT,
+                 system=None, clock=time.monotonic, start_thread=True):
+        self.preference = preference
+        self.hwmon_root = hwmon_root
+        self.system = system or platform.system()
+        self.clock = clock
+        self.file = self.source = None
+        self.poller = None
+        self.next_scan = 0.0
+        if self.system == "Linux":
+            self._scan()
+            path = None if liquidctl == "none" else (liquidctl if liquidctl != "auto" else shutil.which("liquidctl"))
+            if path and not self.file and (liquidctl != "auto" or os.path.exists(path)):
+                self.poller = LiquidctlPoller(path, clock)
+                if start_thread:
+                    self.poller.start()
+
+    def _scan(self):
+        found = find_coolant_file(self.hwmon_root)
+        self.file, self.source = found if found else (None, None)
+        self.next_scan = self.clock() + self.RESCAN
+
+    def read(self):
+        """(coolant temp C or None, source name or None); never blocks on the liquidctl process."""
+        if self.system != "Linux":
+            return self._read_psutil()
+        if not self.file and self.clock() >= self.next_scan:
+            self._scan()
+        if self.file:
+            c = _read(self.file, int)
+            c = c / 1000 if c is not None else None
+            if _plausible(c):
+                return c, self.source
+            self.file = self.source = None   # sensor vanished or went bogus: look again at the next rescan
+        if self.poller:
+            return self.poller.latest()
+        return None, None
+
+    @staticmethod
+    def _read_psutil():
+        if not hasattr(psutil, "sensors_temperatures"):
+            return None, None
+        try:
+            temps = psutil.sensors_temperatures()
+        except Exception:
+            return None, None
+        for chip, entries in temps.items():
+            for e in entries:
+                if COOLANT_RE.search(e.label or "") and _plausible(e.current):
+                    return e.current, chip
+        return None, None
+
+    def fields(self):
+        temp, source = self.read()
+        return {"coolant_temp": temp, "coolant_source": source if temp is not None else None,
+                "temp_source": pick_temp_source(temp, self.preference)}
+
+
 class Rapl:
     """CPU package power from the Linux powercap energy counter (root may be required)."""
 
@@ -149,7 +320,8 @@ class Rapl:
 
 
 class CpuSampler:
-    def __init__(self):
+    def __init__(self, coolant=None):
+        self.coolant = coolant or CoolantSensor()
         self.name = cpu_model()
         self.cores = psutil.cpu_count(logical=False) or 0
         self.threads = psutil.cpu_count(logical=True) or 0
@@ -234,6 +406,7 @@ class CpuSampler:
         except (AttributeError, OSError):
             load = None
         return {
+            **self.coolant.fields(),
             "name": self.name,
             "cores": self.cores,
             "threads": self.threads,
@@ -544,9 +717,9 @@ def subtract_display(g, baseline):
 
 
 class Telemetry:
-    def __init__(self, interval, amd_peak_bw):
+    def __init__(self, interval, amd_peak_bw, coolant=None):
         self.interval = interval
-        self.cpu = CpuSampler()
+        self.cpu = CpuSampler(coolant)
         self.gpus = detect_gpus(amd_peak_bw)
         self.baselines = [DisplayBaseline() for _ in self.gpus]
         self.host = socket.gethostname()
@@ -724,6 +897,10 @@ def main():
                          "reuses a running copy and quits after the last window closes")
     ap.add_argument("--idle-exit", type=float, default=20, metavar="SECONDS",
                     help="with --app --browser, how long to wait after the last window closes (default 20)")
+    ap.add_argument("--temp-source", choices=("auto", "cpu", "coolant"), default="auto",
+                    help="temperature for the dial: coolant if the machine has a sensor (auto, coolant) or the CPU die (cpu)")
+    ap.add_argument("--liquidctl", default="auto", metavar="PATH",
+                    help="liquidctl executable for AIO coolers without a kernel driver (default: find it on PATH; 'none' disables)")
     ap.add_argument("--version", action="version", version=f"PCmeter {__version__}")
     args = ap.parse_args()
 
@@ -739,7 +916,8 @@ def main():
 
     def start():
         """Start sampling and serving; returns (telemetry, server, url)."""
-        telemetry = Telemetry(args.interval, args.amd_peak_bw)
+        telemetry = Telemetry(args.interval, args.amd_peak_bw,
+                              CoolantSensor(args.temp_source, args.liquidctl))
         try:
             server = ThreadingHTTPServer((args.host, args.port), make_handler(telemetry))
         except OSError:

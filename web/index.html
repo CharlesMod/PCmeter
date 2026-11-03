@@ -868,7 +868,11 @@ function pointer(ctx, cx, cy, a, r0, r1, w, glow, bare = false) {   // bare: no 
 const A0 = 0.75 * Math.PI, SWEEP = 1.5 * Math.PI;
 const angle = v => A0 + SWEEP * clamp(v);
 const TEMP_MIN = 20, TEMP_MAX = 100;
-const tempNorm = t => (t - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
+/* Each dial carries its own temperature scale: {min, max, zones:[warn, hot], tag}. */
+const SC_DIE = { min: TEMP_MIN, max: TEMP_MAX, zones: [70, 85], tag: '', id: 'die' };
+const SC_GPU = { min: TEMP_MIN, max: TEMP_MAX, zones: [70, 83], tag: '', id: 'gpu' };
+const SC_LIQ = { min: 20, max: 60, zones: [40, 50], tag: 'LIQ', id: 'liq' };
+const tempNorm = (t, sc) => (t - sc.min) / (sc.max - sc.min);
 
 function dialGeometry(w, h) {
   const cx = w / 2, cy = h * 0.455, R = Math.min(w / 2 - 6, cy - 4);
@@ -887,8 +891,8 @@ function tickPath(g, from, to) {
 
 /* The parts of a dial that never move are drawn once per size and skin, then copied. */
 const dialBase = new Map();
-function dialLayer(canvas, s, zones) {
-  const key = `${s.w}x${s.h}@${s.d}|${themeId}|${zones}`;
+function dialLayer(canvas, s, sc) {
+  const zones = sc.zones, key = `${s.w}x${s.h}@${s.d}|${themeId}|${sc.id}|${zones}|${sc.min}|${sc.max}`;
   const hit = dialBase.get(canvas);
   if (hit && hit.key === key) return hit.layer;
   const layer = document.createElement('canvas');
@@ -913,10 +917,10 @@ function dialLayer(canvas, s, zones) {
   ctx.beginPath(); ctx.arc(g.sx, g.sy, g.sr, 0, Math.PI * 2);
   ctx.fillStyle = T.disc; ctx.fill();
   ctx.strokeStyle = fg(.14); ctx.lineWidth = 1; ctx.stroke();
-  const bands = [[TEMP_MIN, zones[0], C.cool], [zones[0], zones[1], C.warn], [zones[1], TEMP_MAX, C.hot]];
+  const bands = [[sc.min, zones[0], C.cool], [zones[0], zones[1], C.warn], [zones[1], sc.max, C.hot]];
   ctx.lineCap = 'butt'; ctx.lineWidth = 2.5;
   for (const [a, b, col] of bands) {
-    ctx.beginPath(); ctx.arc(g.sx, g.sy, g.sr - 4, angle(tempNorm(a)) + .03, angle(tempNorm(b)) - .03); ctx.strokeStyle = col(.55); ctx.stroke();
+    ctx.beginPath(); ctx.arc(g.sx, g.sy, g.sr - 4, angle(tempNorm(a, sc)) + .03, angle(tempNorm(b, sc)) - .03); ctx.strokeStyle = col(.55); ctx.stroke();
   }
   dialBase.set(canvas, { key, layer });
   return layer;
@@ -935,11 +939,12 @@ function sweptPointer(ctx, cx, cy, aFrom, aTo, r0, r1, w, glow) {
   for (let i = 0; i < n; i++) pointer(ctx, cx, cy, aFrom + (aTo - aFrom) * i / (n - 1), r0, r1, w, glow, i < n - 1);
   ctx.restore();
 }
-function drawDial(canvas, load, tNorm, tempC, acc, zones, loadFrom = load, tFrom = tNorm) {
+function drawDial(canvas, load, tNorm, tempC, acc, sc, loadFrom = load, tFrom = tNorm) {
   const s = fit(canvas);
   if (!s) return;
   const { ctx, w, h } = s, g = dialGeometry(w, h);
-  ctx.drawImage(dialLayer(canvas, s, zones), 0, 0, w, h);
+  const zones = sc.zones;
+  ctx.drawImage(dialLayer(canvas, s, sc), 0, 0, w, h);
 
   // ticks lit up to the needle
   const lit = Math.floor(clamp(load) * 50 + 0.05);
@@ -983,6 +988,10 @@ function drawDial(canvas, load, tNorm, tempC, acc, zones, loadFrom = load, tFrom
   ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.font = `400 ${Math.round(g.sr * .42)}px ${T.num}`;
   ctx.fillText(tempC == null ? '—' : `${Math.round(tempC)}°`, g.sx, g.sy + 1);
+  if (sc.tag && tempC != null) {   // source tag under the reading, e.g. "34° / LIQ"
+    ctx.font = `600 ${Math.max(6, Math.round(g.sr * .26))}px ${T.ui}`; ctx.fillStyle = C.ink3;
+    ctx.fillText(sc.tag, g.sx, g.sy + g.sr * .5);
+  }
 }
 
 /* Sparkline with area fill, faint midline and a lit endpoint.
@@ -1209,8 +1218,8 @@ class Cores {
 
 /* ---------- state */
 const S = {
-  cpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], zones: [70, 85], shown: '' },
-  gpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], bwHist: [], bwPeak: 1, zones: [70, 83], present: false, shown: '' },
+  cpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], sc: SC_DIE, shown: '' },
+  gpu: { load: new Spring(), temp: new Spring(), tempC: null, hist: [], bwHist: [], bwPeak: 1, sc: SC_GPU, present: false, shown: '' },
 };
 const geigers = { cpu: new Geiger('cpu', -.6, 2600), gpu: new Geiger('gpu', .6, 1300) };
 const cores = new Cores($('cpu-cores'));
@@ -1303,7 +1312,16 @@ function ingest(d) {
   const c = d.cpu;
   if (c) {
     const u = (c.util ?? 0) / 100;
-    S.cpu.load.t = u; S.cpu.tempC = c.temp; S.cpu.temp.t = c.temp == null ? 0 : tempNorm(c.temp);
+    const liq = c.temp_source === 'coolant' && typeof c.coolant_temp === 'number';   // missing keys = old backend
+    const sc = liq ? SC_LIQ : SC_DIE, tc = liq ? c.coolant_temp : c.temp;
+    if (sc !== S.cpu.sc) { S.cpu.sc = sc; S.cpu.temp.x = S.cpu.temp.t = tc == null ? 0 : tempNorm(tc, sc); S.cpu.temp.v = 0; }   // snap on source change
+    S.cpu.load.t = u; S.cpu.tempC = tc; S.cpu.temp.t = tc == null ? 0 : tempNorm(tc, sc);
+    const cd = $('cpu-dial'), has = x => typeof x === 'number' ? Math.round(x) : null;
+    const label = liq ? `CPU load and coolant temperature (${c.coolant_source || 'coolant'}) dial` : 'CPU load and temperature dial';
+    const tip = liq ? (has(c.temp) != null ? `Coolant ${has(c.coolant_temp)} °C · CPU die ${has(c.temp)} °C` : `Coolant temperature (${c.coolant_source || 'coolant'}) ${has(c.coolant_temp)} °C`)
+      : has(c.temp) != null ? `CPU temperature ${has(c.temp)} °C` : '';
+    if (cd.getAttribute('aria-label') !== label) cd.setAttribute('aria-label', label);
+    if (cd.title !== tip) cd.title = tip;
     geigers.cpu.u = u;
     if (c.per_core && c.per_core.length) cores.set(c.per_core);
     push(S.cpu.hist, c.util ?? 0);
@@ -1312,7 +1330,7 @@ function ingest(d) {
   S.gpu.present = !!g;
   if (g) {
     const u = (g.util ?? 0) / 100, mu = (g.mem_util ?? 0) / 100;
-    S.gpu.load.t = u; S.gpu.tempC = g.temp; S.gpu.temp.t = g.temp == null ? 0 : tempNorm(g.temp);
+    S.gpu.load.t = u; S.gpu.tempC = g.temp; S.gpu.temp.t = g.temp == null ? 0 : tempNorm(g.temp, S.gpu.sc);
     geigers.gpu.u = Math.max(u, mu * .8);
     push(S.gpu.hist, g.util ?? 0);
     if (g.bw_gbps != null) S.gpu.bwPeak = g.bw_peak_gbps || Math.max(S.gpu.bwPeak, g.bw_gbps);
@@ -1447,7 +1465,7 @@ function frame(t) {
     const canvas = $(`${k}-dial`);
     const lf = s.load.x - s.load.v * shut, tf = s.temp.x - s.temp.v * shut;   // where the needles were when it opened
     const key = `${s.load.x.toFixed(4)}|${lf.toFixed(4)}|${s.temp.x.toFixed(4)}|${tf.toFixed(4)}|${s.tempC == null ? '' : Math.round(s.tempC)}`;
-    if (key !== s.shown || stale.has(canvas)) { s.shown = key; stale.delete(canvas); drawDial(canvas, s.load.x, s.temp.x, s.tempC, ACC[k], s.zones, lf, tf); }
+    if (key !== s.shown || stale.has(canvas)) { s.shown = key; stale.delete(canvas); drawDial(canvas, s.load.x, s.temp.x, s.tempC, ACC[k], s.sc, lf, tf); }
     geigers[k].draw(now, shut);
   }
   if (!deck.classList.contains('compact')) { cores.step(dt, t); cores.draw(); }

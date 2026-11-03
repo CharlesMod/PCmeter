@@ -58,13 +58,17 @@ open `web/index.html` directly from disk.
 | --- | --- |
 | `--interval 0.5` | Seconds between samples |
 | `--amd-peak-bw 960` | Peak VRAM bandwidth in GB/s for AMD cards, so throughput shows in GB/s |
+| `--temp-source auto` | Dial temperature: `auto`/`coolant` use the radiator/coolant sensor when there is one, `cpu` always the die |
+| `--liquidctl PATH` | liquidctl executable for AIO coolers without a kernel driver (default: found on PATH; `none` disables). Only `liquidctl status` is ever run |
 | `--port 8765` / `--host` | Where to listen |
 | `--app` / `--app --browser` | Desktop gadgets, or a browser app window |
 
 ## What is measured
 
 - **CPU**: total and per-thread load, clock, temperature (`k10temp`, `coretemp`, ...),
-  load average, package power (RAPL; often needs root to read).
+  load average, package power (RAPL; often needs root to read). A coolant/radiator temperature
+  (hwmon: Kraken, D5 Next, Aquacomputer, ...; else `liquidctl status`) is reported as
+  `coolant_temp` and preferred for the dial when present.
 - **NVIDIA** (NVML): load, temperature, clocks, power, fan, VRAM, top 10 processes
   with per-process load and VRAM.
 - **AMD** (amdgpu sysfs): the same, with per-process data from `/proc/<pid>/fdinfo`.
