@@ -3,9 +3,9 @@ import "Skins.js" as Skins
 import "Fmt.js" as F
 
 // One gadget card (CPU or GPU). `host` is the window's Bridge (skin, view, mute, move/resize/menu) and
-// `feed` delivers a telemetry snapshot per sample. Nothing here runs on a timer except `tick`, and that
-// one runs only while the card is visible and something is still moving: the needles settling, a
-// Geiger count on the tape or the LED fading. At rest the scene graph has nothing to redraw.
+// `feed` delivers a telemetry snapshot per sample. Once per sample, ingest() sets the new text and starts
+// the animators (needles, arc, bars, tape, LED), which the render thread runs. Nothing ticks on the GUI
+// thread in between, and a card that is not visible has no animation at all.
 Item {
     id: root
     required property string cardKey
@@ -34,13 +34,10 @@ Item {
     property string peakText: "peak —"
     property var rows: ({})                  // label -> [value, unit]
     property real vramFrac: 0
-    property var cores: []                   // what the bars show now (eased)
+    property var cores: []                   // per-thread load, 0..1; the bars glide to it
     property var peaks: []
-    property var coresFrom: []
-    property var coresTo: []
-    property var peaksFrom: []
-    property var peaksTo: []
-    property real coresAt: 0                 // when the bars started moving toward coresTo
+    property real loadT: 0                   // dial targets, 0..1
+    property real tempT: 0
     property string threadsCap: "—"
     property var procs: []
     property string procCap: ""
@@ -50,60 +47,15 @@ Item {
     property string bwNote: ""
     property string bwPeak: ""
     property int sampleMs: 500
+    // Every animation glides from one sample to the next, so motion is continuous (PCMETER_BURST=ms shortens it)
+    readonly property int burst: host.burstMs > 0 ? Math.min(host.burstMs, sampleMs) : Math.round(sampleMs * 1.04)
     readonly property var zones: isCpu ? [70, 85] : [70, 83]
 
-    // ---- motion: two springs (58 / 11.5, as in the web cards); `animating` is true while any part moves
-    property var ld: ({ x: 0, v: 0, t: 0 })
-    property var tp: ({ x: 0, v: 0, t: 0 })
-    property bool animating: false
-    property real lastT: 0
-    property int ticks: 0
-    property bool skip: false
     function nowS() { return Date.now() / 1000 }
-    function spring(s, dt) {
-        s.v += (58 * (s.t - s.x) - 11.5 * s.v) * dt
-        s.x += s.v * dt
-        if (Math.abs(s.t - s.x) < 1e-4 && Math.abs(s.v) < 1e-3) { s.x = s.t; s.v = 0; return false }
-        return true
-    }
-    function step() {
-        var now = nowS()
-        // Half rate (12 fps) while nothing quick is happening: the needles creep less than a pixel a frame,
-        // the LED is dark and no count is due in the next 90 ms (the tape alone scrolls 5 px a frame).
-        if (Math.abs(ld.v) * 375 < 24 && Math.abs(tp.v) * 60 < 24 && cores === coresTo && geiger.lit === 0 &&
-            (geiger.fired >= geiger.evT.length || geiger.evT[geiger.fired] - now > .09) && (skip = !skip)) return
-        var dt = Math.min(.1, now - lastT), shut = dt * .5
-        lastT = now
-        var moving = spring(ld, dt)
-        moving = spring(tp, dt) || moving
-        dial.move(ld.x, ld.x - ld.v * shut, tp.x, tp.x - tp.v * shut)
-        var u = F.clamp((now - coresAt) / (sampleMs * .0009))
-        if (u < 1) {
-            var e = u < .5 ? 2 * u * u : 1 - 2 * (1 - u) * (1 - u), k, a = [], b = []
-            for (k = 0; k < coresTo.length; k++) {
-                a.push(coresFrom[k] + (coresTo[k] - coresFrom[k]) * e)
-                b.push(peaksFrom[k] + (peaksTo[k] - peaksFrom[k]) * u)
-            }
-            cores = a; peaks = b; moving = true
-        } else if (cores !== coresTo) { cores = coresTo; peaks = peaksTo }
-        var was = geiger.busy
-        var busy = geiger.step(now, dt)
-        geiger.shut = shut
-        if (busy || was) { ticks++; if (ticks % 2 === 0 || !busy) geiger.paintTape(now) }
-        animating = moving || busy
-    }
-    Timer {
-        id: tick
-        interval: 42                       // 24 frames a second, like the web cards
-        repeat: true
-        running: root.host.active && root.animating && root.present
-        onRunningChanged: if (running) root.lastT = root.nowS()
-        onTriggered: root.step()
-    }
     Connections {
         target: root.host
         function onActiveChanged() {      // shown again: counts that never happened are forgotten
-            if (root.host.active) { geiger.reset(root.nowS()); root.animating = true }
+            if (root.host.active) geiger.reset(root.nowS())
         }
     }
 
@@ -115,8 +67,9 @@ Item {
         var iv = sampleMs / 1000, r = {}
         if (isCpu) {
             if (!c) return
-            var u = (c.util || 0) / 100
-            ld.t = u; tempC = c.temp; tp.t = tnorm(c.temp); geiger.u = u
+            var u = (c.util_avg !== undefined ? c.util_avg : (c.util || 0)) / 100     // the dial shows the 3 s mean
+            var ur = (c.util || 0) / 100
+            loadT = u; tempC = c.temp; tempT = tnorm(c.temp); geiger.u = ur
             nameText = c.name || "—"
             subText = c.cores ? c.cores + " cores · " + c.threads + " threads" : c.threads + " threads"
             r.a = [c.freq_mhz ? F.fmt(c.freq_mhz / 1000, 2) : "—", c.freq_mhz ? "GHz" : ""]
@@ -128,14 +81,12 @@ Item {
                 for (k = 0; k < pc.length; k++) { if (pc[k] > pc[bi]) bi = k; if (pc[k] > 50) hi++ }
                 r.d = ["#" + bi + " · " + F.fmt(pc[bi]), "%"]
                 threadsCap = hi + " of " + pc.length + " above 50%"
-                var v = [], pk = peaksTo.length === pc.length ? peaksTo.slice() : []
+                var v = [], pk = peaks.length === pc.length ? peaks.slice() : []
                 for (k = 0; k < pc.length; k++) {
                     var x = pc[k] / 100
                     v.push(x); pk[k] = pk[k] === undefined || x >= pk[k] ? x : Math.max(x, pk[k] - .06)
                 }
-                coresFrom = cores.length === pc.length ? cores : v; peaksFrom = peaks.length === pc.length ? peaks : pk
-                coresTo = v; peaksTo = pk; coresAt = nowS()
-                if (!cores.length) { cores = v; peaks = pk }
+                cores = v; peaks = pk
             }
             F.push(hist, c.util || 0, 120)
             peakText = "peak " + Math.round(Math.max.apply(null, hist)) + "%"
@@ -148,8 +99,8 @@ Item {
             if (!g) {
                 nameText = gs[0] && gs[0].name || "No GPU detected"; subText = "—"; geiger.u = 0; return
             }
-            var gu = (g.util || 0) / 100, mu = (g.mem_util || 0) / 100
-            ld.t = gu; tempC = g.temp; tp.t = tnorm(g.temp); geiger.u = Math.max(gu, mu * .8)
+            var gu = (g.util_avg !== undefined ? g.util_avg : (g.util || 0)) / 100, gr = (g.util || 0) / 100, mu = (g.mem_util || 0) / 100
+            loadT = gu; tempC = g.temp; tempT = tnorm(g.temp); geiger.u = Math.max(gr, mu * .8)
             nameText = g.name
             var sub = []
             if (g.vram_total_mb) sub.push(Math.round(g.vram_total_mb / 1024) + " GB")
@@ -186,9 +137,8 @@ Item {
         }
         rows = r
         rev++
+        dial.aim(loadT, tempT, burst)
         geiger.schedule(iv, nowS())
-        animating = true
-        if (!tick.running && host.active) lastT = nowS()
     }
     Connections {
         target: root.feed
@@ -261,8 +211,14 @@ Item {
                 visible: !(cardHover.hovered && !root.gauge)
                 Rectangle {
                     width: 10; height: 10; radius: 5; anchors.verticalCenter: parent.verticalCenter
-                    color: Skins.qt(root.acc); opacity: .18 + .82 * geiger.lit
+                    id: ledDot
+                    color: Skins.qt(root.acc); opacity: .18
                     border.width: 1; border.color: Skins.qt(root.sk.hair)
+                    OpacityAnimator { id: ledFade; target: ledDot; to: .18; easing.type: Easing.OutExpo }
+                }
+                Connections {
+                    target: geiger
+                    function onPulse(peak, ms) { ledFade.stop(); ledFade.from = .18 + .82 * peak; ledFade.duration = ms; ledFade.restart() }
                 }
                 Text {
                     visible: !root.gauge; anchors.verticalCenter: parent.verticalCenter
@@ -300,14 +256,14 @@ Item {
                 ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Load avg" : "Fan"; value: root.rows.c ? root.rows.c[0] : "—"; unit: root.rows.c ? root.rows.c[1] : "" }
                 ReadRow {
                     width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Busiest thread" : "VRAM"
-                    meter: !root.isCpu; frac: root.vramFrac
+                    meter: !root.isCpu; frac: root.vramFrac; glide: root.burst
                     value: root.rows.d ? root.rows.d[0] : "—"; unit: root.rows.d ? root.rows.d[1] : ""
                 }
                 Item {
                     width: parent.width; height: 8 + 14 + 4 + 38
                     Text { y: 8; text: "LOAD, LAST 60 S"; font.pixelSize: 10; font.letterSpacing: 1.1; font.family: root.sk.ui; color: Skins.qt(root.sk.ink3) }
                     Text { y: 8; anchors.right: parent.right; text: root.peakText; font.pixelSize: 11; font.family: root.sk.num; color: Skins.qt(root.sk.ink2) }
-                    Spark { y: 26; width: parent.width; height: 38; sk: root.sk; acc: root.acc; series: root.hist; rev: root.rev }
+                    Spark { y: 26; width: parent.width; height: 38; sk: root.sk; acc: root.acc; series: root.hist; rev: root.rev; glide: root.sampleMs }
                 }
             }
         }
@@ -322,7 +278,7 @@ Item {
             id: geiger
             visible: root.present
             width: parent.width
-            sk: root.sk; acc: root.acc; host: root.host; key: root.cardKey
+            sk: root.sk; acc: root.acc; host: root.host; key: root.cardKey; burstMs: root.burst
         }
 
         // ---- per thread (CPU) / VRAM throughput (GPU)
@@ -334,7 +290,7 @@ Item {
                 Text { text: "PER THREAD"; font.pixelSize: 10; font.letterSpacing: 1.1; font.weight: Font.DemiBold; font.family: root.sk.ui; color: Skins.qt(root.sk.ink2) }
                 Text { anchors.right: parent.right; text: root.threadsCap; font.pixelSize: 11; font.family: root.sk.num; color: Skins.qt(root.sk.ink3) }
             }
-            Cores { width: parent.width; height: 70; sk: root.sk; acc: root.acc; values: root.cores; peaks: root.peaks }
+            Cores { width: parent.width; height: 70; sk: root.sk; acc: root.acc; values: root.cores; peaks: root.peaks; glide: root.burst }
         }
         Column {
             visible: !root.isCpu && root.present && !root.compact && !root.gauge
@@ -348,15 +304,12 @@ Item {
                     Text { text: root.bwUnit; y: 3; font.pixelSize: 11; font.family: root.sk.ui; color: Skins.qt(root.sk.ink3) }
                 }
             }
-            Rectangle {
-                width: parent.width; height: 5; radius: 2.5
-                color: Skins.qt([root.sk.fg[0], root.sk.fg[1], root.sk.fg[2], .08])
-                Rectangle {
-                    height: parent.height; radius: 2.5; width: parent.width * F.clamp(root.bwFrac); color: Skins.qt(root.acc)
-                    Behavior on width { NumberAnimation { duration: 450; easing.type: Easing.OutCubic } }
-                }
+            Meter {
+                width: parent.width; height: 5
+                frac: root.bwFrac
+                trackColor: Skins.qt([root.sk.fg[0], root.sk.fg[1], root.sk.fg[2], .08]); fillColor: Skins.qt(root.acc); duration: root.burst
             }
-            Spark { width: parent.width; height: 30; sk: root.sk; acc: root.acc; series: root.bwHist; maxValue: root.bwMax; rev: root.rev }
+            Spark { width: parent.width; height: 30; sk: root.sk; acc: root.acc; series: root.bwHist; maxValue: root.bwMax; rev: root.rev; glide: root.sampleMs }
             Item {
                 width: parent.width; height: 14
                 Text { width: parent.width - 80; elide: Text.ElideRight; text: root.bwNote; font.pixelSize: 10; font.family: root.sk.ui; color: Skins.qt(root.sk.ink3) }

@@ -12,6 +12,7 @@ Item {
     property string value: "—"
     property string unit: ""
     property bool meter: false
+    property int glide: 450
     property real frac: 0
     property bool last: false
     implicitHeight: 14 + Math.max(lbl.implicitHeight, val.implicitHeight) + (meter ? 8 : 0)
@@ -34,15 +35,12 @@ Item {
             color: row.sk ? Skins.qt(row.sk.ink3) : "white"
         }
     }
-    Rectangle {
+    Meter {
         visible: row.meter
-        y: parent.height - 8 - 1 + 0; anchors.left: parent.left; anchors.right: parent.right; height: 3; radius: 1.5
-        color: row.sk ? Skins.qt([row.sk.fg[0], row.sk.fg[1], row.sk.fg[2], .08]) : "gray"
-        Rectangle {
-            height: parent.height; radius: 1.5; width: parent.width * F.clamp(row.frac)
-            color: row.acc ? Skins.qt(row.acc) : "white"
-            Behavior on width { NumberAnimation { duration: 450; easing.type: Easing.OutCubic } }
-        }
+        y: parent.height - 8 - 1 + 0; anchors.left: parent.left; anchors.right: parent.right; height: 3
+        frac: row.frac; duration: row.glide
+        trackColor: row.sk ? Skins.qt([row.sk.fg[0], row.sk.fg[1], row.sk.fg[2], .08]) : "gray"
+        fillColor: row.acc ? Skins.qt(row.acc) : "white"
     }
     Rectangle {
         visible: !row.last

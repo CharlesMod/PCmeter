@@ -4,9 +4,11 @@ import "Skins.js" as Skins
 import "Fmt.js" as F
 
 // The activity strip: random counts whose rate climbs steeply with load, drawn as ticks on a tape that
-// scrolls left over 6 s, with a counts-per-minute readout and a speaker with its own mute and volume.
-// Counts are events. Each sample schedules the counts of the next interval (Poisson); the card's frame
-// loop (which runs only while something is moving) fires them, lights the LED and plays the click.
+// slides left over 6 s, with a counts-per-minute readout and a speaker with its own mute and volume.
+// Each sample draws the counts of the next interval once, into one small canvas (a segment of the tape).
+// The segments sit on a belt that an XAnimator slides at constant speed on the render thread, so ticks
+// appear at their time and travel left with no JS per frame. The LED pulses once per sample; the click
+// sound (only when unmuted) has its own timer that wakes at each count.
 Rectangle {
     id: strip
     property var sk
@@ -14,16 +16,20 @@ Rectangle {
     property var host
     property string key: "cpu"
     property real u: 0                  // load 0..1 that sets the rate
-    property real lit: 0                // LED brightness 0..1
-    property real shut: 0               // shutter smear, seconds
     property string cpm: "0"
+    signal pulse(real peak, int ms)
     readonly property bool audible: host && host.sound && !host.muted && host.volume > 0
-    property bool busy: false
-    property var evT: []                // event times, seconds
-    property var evA: []                // amplitudes
-    property int head: 0                // oldest event still counted (10 s)
-    property int fired: 0               // events before this index have happened
-    property real lastCpm: 0
+    property var evT: []                // counts of the last 10 s: times (seconds) and amplitudes
+    property var evA: []
+    property int burstMs: 160           // the belt moves, and the LED fades, within this window after a sample
+    property real iv: .5                // sample interval, seconds
+    property real tref: 0               // belt time origin, seconds
+    property int slot: 0
+    readonly property real speed: tapeView.width / 6
+    readonly property int pool: Math.min(80, Math.ceil(6.6 / Math.max(.1, iv)) + 2)
+    property var clickT: []             // counts of this interval not yet clicked
+    property var clickA: []
+    property int clickAt: 0
     property real pan: key === "cpu" ? -.6 : .6
 
     implicitHeight: 70
@@ -31,34 +37,55 @@ Rectangle {
     color: sk ? Skins.qt(sk.well) : "transparent"
     border.color: sk ? Skins.qt(sk.hair) : "transparent"
 
+    function beltX(t) { return tapeView.width - speed * (t - tref) }
+    // After a pause (or at the start): forget the counts that never happened.
+    function reset(now) {
+        evT = []; evA = []; cpm = "0"; tref = now; clickT = []; clickAt = 0; clickTimer.stop()
+        beltAnim.stop(); belt.x = beltX(now)
+        for (var i = 0; i < segs.count; i++) segs.itemAt(i).clear()
+    }
+    // One call per sample, at `now`: draw the counts of [now, now + interval) and start the belt moving.
     function schedule(interval, now) {
+        iv = interval
+        if (tref === 0) tref = now
         var rate = .4 + 80 * Math.pow(F.clamp(u), 1.7)
-        var n = F.poisson(rate * interval), list = []
-        for (var i = 0; i < n; i++) list.push([now + Math.random() * interval, F.clamp(.25 + u * .55 + (Math.random() - .5) * .5, .15, 1)])
+        var n = F.poisson(rate * interval), list = [], i, amax = 0
+        for (i = 0; i < n; i++) list.push([now + Math.random() * interval, F.clamp(.25 + u * .55 + (Math.random() - .5) * .5, .15, 1)])
         list.sort(function (a, b) { return a[0] - b[0] })
-        for (i = 0; i < list.length; i++) { evT.push(list[i][0]); evA.push(list[i][1]) }
+        var keep = 0
+        while (keep < evT.length && evT[keep] < now + interval - 10) keep++
+        var t = evT.slice(keep), a = evA.slice(keep)
+        for (i = 0; i < list.length; i++) { t.push(list[i][0]); a.push(list[i][1]); amax = Math.max(amax, list[i][1]) }
+        evT = t; evA = a
+        cpm = (t.length * 6).toLocaleString(Qt.locale(), "f", 0)
+        if (now - tref > 3000) rebase(now)
+        var seg = segs.itemAt(slot % pool)
+        slot++
+        if (seg) seg.draw(list, now)
+        beltAnim.stop()
+        beltAnim.from = beltX(now); beltAnim.to = beltX(now + interval); beltAnim.duration = Math.round(interval * 1040)
+        beltAnim.restart()
+        if (n > 0) pulse(Math.min(1, .4 + .1 * n + .3 * amax), burstMs)
+        clickT = list.map(function (e) { return e[0] }); clickA = list.map(function (e) { return e[1] }); clickAt = 0
+        if (audible) armClick()
     }
-    function reset(now) {            // after a pause: forget the counts that never happened
-        evT = []; evA = []; head = 0; fired = 0; lit = 0; busy = false; lastCpm = 0; cpm = "0"
-        tape.requestPaint()
+    function rebase(now) {              // keep belt coordinates small: move the origin to `now`
+        tref = now
+        belt.x = beltX(now)
     }
-    // Advance to `now`; returns true while anything is still moving (counts pending, on the tape or glowing).
-    function step(now, dt) {
-        while (fired < evT.length && evT[fired] <= now) {
-            lit = Math.min(1, lit + .45 + evA[fired] * .5)
-            if (audible && sfx.item) sfx.item.play(evA[fired])
-            fired++
+    function armClick() {
+        var now = Date.now() / 1000
+        while (clickAt < clickT.length && clickT[clickAt] <= now) clickAt++
+        if (clickAt < clickT.length && sfx.item) { clickTimer.interval = Math.max(1, Math.round((clickT[clickAt] - now) * 1000)); clickTimer.restart() }
+    }
+    Timer {
+        id: clickTimer
+        onTriggered: {
+            if (strip.audible && sfx.item && strip.clickAt < strip.clickT.length) sfx.item.play(strip.clickA[strip.clickAt++])
+            strip.armClick()
         }
-        lit *= Math.exp(-dt * 20)
-        if (lit < .01) lit = 0
-        while (head < fired && now - evT[head] > 10) head++
-        if (head > 1024) { evT = evT.slice(head); evA = evA.slice(head); fired -= head; head = 0 }
-        if (now - lastCpm > .5) { lastCpm = now; var c = ((fired - head) * 6).toLocaleString(Qt.locale(), "f", 0); if (c !== cpm) cpm = c }
-        var onTape = fired > head && now - evT[fired - 1] < 6.2
-        busy = fired < evT.length || onTape || lit > 0
-        return busy
     }
-    function paintTape(now) { tape.nowS = now; tape.requestPaint() }
+    onAudibleChanged: if (!audible) clickTimer.stop()
 
     Item {
         anchors.fill: parent; anchors.margins: 6; anchors.leftMargin: 10; anchors.rightMargin: 10
@@ -72,53 +99,57 @@ Rectangle {
                 color: strip.sk ? Skins.qt(strip.sk.ink3) : "white"
             }
         }
-        Canvas {
-            id: tape
-            property real nowS: 0
+        Item {
+            id: tapeBox
             anchors.left: lbl.right; anchors.leftMargin: 10
             anchors.right: cpmBox.left; anchors.rightMargin: 10
             anchors.verticalCenter: parent.verticalCenter
             height: 34
-            renderTarget: Canvas.Image
-            renderStrategy: Canvas.Immediate
-            onWidthChanged: requestPaint()
-            property bool blank: false
-            onPaint: {
-                var w = width, h = height, sk = strip.sk
-                if (w < 2 || !sk) return
-                var mid = h / 2, speed = w / 6, now = nowS || Date.now() / 1000
-                var smear = speed * strip.shut, lw = 1.4 + smear, fade = 1.4 / lw
-                var buckets = [], fresh = [], any = false, i
-                for (i = 0; i < 8; i++) buckets.push([])
-                for (i = strip.head; i < strip.fired; i++) {
-                    var age = now - strip.evT[i], x = w - 2 - age * speed
-                    if (x < 0) continue
-                    var amp = strip.evA[i], hh = (h - 4) * amp
-                    if (age < .18) fresh.push([x, hh])
-                    else {
-                        var alpha = .15 + .8 * Math.exp(-age * .45) * F.clamp(x / 40) * amp
-                        buckets[Math.min(7, Math.floor(alpha * 8))].push([x, hh])
+            Rectangle {              // the faint midline
+                y: parent.height / 2; width: parent.width; height: 1
+                color: strip.sk ? Skins.qt([strip.sk.fg[0], strip.sk.fg[1], strip.sk.fg[2], .07]) : "transparent"
+            }
+            Item {
+                id: tapeView
+                anchors.fill: parent
+                clip: true
+                layer.enabled: true
+                layer.effect: ShaderEffect {
+                    property real fadeLeft: Math.min(.5, 40 / Math.max(1, tapeView.width))
+                    property real freshRight: Math.min(.4, 7 / Math.max(1, tapeView.width))
+                    property color hot: strip.sk ? Skins.qt(strip.sk.needle) : "white"
+                    fragmentShader: Qt.resolvedUrl("shaders/tape.frag.qsb")
+                }
+                Item {
+                    id: belt
+                    Repeater {
+                        id: segs
+                        model: strip.pool
+                        Canvas {
+                            id: seg
+                            property real t0: 0
+                            property var list: []
+                            x: strip.speed * (t0 - strip.tref) - 2
+                            width: Math.ceil(strip.speed * strip.iv) + 4; height: tapeView.height
+                            renderTarget: Canvas.Image
+                            renderStrategy: Canvas.Immediate
+                            property bool blank: true
+                            function draw(l, t) { t0 = t; list = l; blank = false; requestPaint() }
+                            function clear() { list = []; if (!blank) { blank = true; requestPaint() } }
+                            onWidthChanged: requestPaint()
+                            onPaint: {
+                                var ctx = getContext("2d"); ctx.reset()
+                                if (list.length === 0 || !strip.acc) return
+                                var h = height, mid = h / 2
+                                for (var i = 0; i < list.length; i++) {
+                                    var x = 2 + (list[i][0] - t0) * strip.speed, hh = (h - 4) * list[i][1]
+                                    ctx.strokeStyle = Skins.css(strip.acc, .45 + .5 * list[i][1]); ctx.lineWidth = 1.4
+                                    ctx.beginPath(); ctx.moveTo(x, mid - hh / 2); ctx.lineTo(x, mid + hh / 2); ctx.stroke()
+                                }
+                            }
+                        }
                     }
-                    any = true
-                }
-                if (!any && blank) return
-                blank = !any
-                var ctx = getContext("2d"); ctx.reset()
-                ctx.strokeStyle = Skins.css([sk.fg[0], sk.fg[1], sk.fg[2], .07]); ctx.lineWidth = 1
-                ctx.beginPath(); ctx.moveTo(0, mid + .5); ctx.lineTo(w, mid + .5); ctx.stroke()
-                var acc = strip.acc
-                ctx.lineWidth = lw
-                for (var b = 0; b < 8; b++) {
-                    if (!buckets[b].length) continue
-                    ctx.beginPath()
-                    for (i = 0; i < buckets[b].length; i++) { ctx.moveTo(buckets[b][i][0], mid - buckets[b][i][1] / 2); ctx.lineTo(buckets[b][i][0], mid + buckets[b][i][1] / 2) }
-                    ctx.strokeStyle = Skins.css(acc, (b + .5) / 8 * fade); ctx.stroke()
-                }
-                if (fresh.length) {
-                    ctx.beginPath()
-                    for (i = 0; i < fresh.length; i++) { ctx.moveTo(fresh[i][0], mid - fresh[i][1] / 2); ctx.lineTo(fresh[i][0], mid + fresh[i][1] / 2) }
-                    ctx.globalAlpha = .3; ctx.strokeStyle = Skins.css(acc); ctx.lineWidth = lw + 3 * sk.glow; ctx.stroke()
-                    ctx.globalAlpha = 1; ctx.lineWidth = lw; ctx.strokeStyle = Skins.css(sk.needle); ctx.stroke()
+                    XAnimator { id: beltAnim; target: belt; easing.type: Easing.Linear }
                 }
             }
         }

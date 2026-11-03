@@ -16,6 +16,7 @@ X11: the windows place themselves and ask KWin for blur with _KDE_NET_WM_BLUR_BE
 
 One copy runs per user: launching again re-shows any dismissed card (D-Bus org.pcmeter.PCmeter).
 """
+import collections
 import ctypes
 import math
 import os
@@ -46,6 +47,7 @@ DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH = 440, 340, 900
 # a real desktop it idles near 0.3% of a core. "cpu" (PCMETER_RENDER=cpu) is the software renderer, for
 # hosts with no usable GL (about 15% of a core when drawing a 4K card).
 RENDER = os.environ.get("PCMETER_RENDER", "gpu")
+BURST_MS = int(os.environ.get("PCMETER_BURST", "0"))
 DEBUG = bool(os.environ.get("PCMETER_DEBUG"))
 QML_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "qml"
 
@@ -100,13 +102,37 @@ class Feed(QObject):
         self._snap = {}
         self._logged = 0.0
         self._arrive.connect(self._store)          # queued: delivered on the Qt thread
+        self._avg = {}                             # key -> deque of (time, util): the dial's 3 s window
 
     def push(self, snap):
         self._arrive.emit(snap)
 
+    DIAL_WINDOW_S = 3.0
+
+    def _smooth(self, key, util, now):
+        """Mean of the samples in the last DIAL_WINDOW_S seconds (fewer at start-up)."""
+        q = self._avg.setdefault(key, collections.deque())
+        q.append((now, util))
+        while len(q) > 1 and now - q[0][0] > self.DIAL_WINDOW_S:
+            q.popleft()
+        return sum(v for _, v in q) / len(q)
+
     @Slot(object)
     def _store(self, snap):
+        now = time.monotonic()
+        snap = dict(snap)                          # the dial's smoothed load rides along as util_avg
+        cpu = snap.get("cpu")
+        if cpu and cpu.get("util") is not None:
+            snap["cpu"] = cpu = dict(cpu, util_avg=self._smooth("cpu", cpu["util"], now))
+        gpus = snap.get("gpus")
+        if gpus:
+            snap["gpus"] = [dict(g, util_avg=self._smooth("gpu%d" % i, g["util"], now))
+                            if g.get("util") is not None else g for i, g in enumerate(gpus)]
         self._snap = snap
+        if DEBUG:
+            ua = [cpu and cpu.get("util_avg")] + [g.get("util_avg") for g in snap.get("gpus") or []]
+            print("DIAL t=%.2f raw=%s avg=%s" % (now % 1000, [cpu and cpu.get("util")] + [g.get("util") for g in snap.get("gpus") or []], ua),
+                  file=sys.stderr, flush=True)
         if DEBUG and time.monotonic() - self._logged > 10:     # PCMETER_DEBUG=1: one summary line per 10 s
             self._logged = time.monotonic()
             cpu, gpus = snap.get("cpu"), snap.get("gpus") or []
@@ -134,6 +160,7 @@ class Bridge(QObject):
     skin = Property(str, lambda self: self.gadget.ctl.skin, notify=skinChanged)
     view = Property(str, lambda self: self.gadget.ctl.view, notify=viewChanged)
     sound = Property(bool, lambda self: self.gadget.ctl.sound, notify=soundChanged)
+    burstMs = Property(int, lambda self: BURST_MS, constant=True)   # how long the animators run after each sample
 
     # on screen and awake: false while the card is hidden or minimised and while the session is locked
     active = Property(bool, lambda self: self._active, notify=activeChanged)
@@ -422,7 +449,15 @@ class Controller(QObject):
             for k, g in self.gadgets.items():
                 if g.isVisible():
                     g.grabWindow().save(f"{folder}/host-{self.skin}-{self.view}-{k}.png")
+        def burst(n=[0]):                     # 10 grabs 40 ms apart, to see that motion is continuous
+            for k, g in self.gadgets.items():
+                if g.isVisible():
+                    g.grabWindow().save(f"{folder}/burst-{k}-{n[0]:02d}.png")
+            n[0] += 1
+            if n[0] < 10:
+                QTimer.singleShot(40, burst)
         QTimer.singleShot(12000, shoot)
+        QTimer.singleShot(14000, burst)
 
     def update_wants(self):
         """Ask the sampler for just what the visible cards show: the process list in the full view, the

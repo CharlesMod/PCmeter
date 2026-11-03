@@ -3,18 +3,18 @@ import "Skins.js" as Skins
 import "Fmt.js" as F
 
 // Dual dial: load on the main face, temperature on the inset sub-dial in the bottom gap.
-// The face (ticks, labels, bands) is one canvas painted once per skin; everything that moves is an item:
-// the lit ticks, the value arc, the needles and the readouts, so a moving needle repaints a few small regions.
+// Nothing here is drawn per frame. The face is one canvas painted once per skin. The value arc and the lit
+// ticks are a second canvas painted once, shown through a shader that reveals it up to `u`. The needles are
+// static shapes. `u` and the needle angles are animated by animators on the render thread, started once per
+// sample by aim(): the GUI thread is idle while they move.
 Item {
     id: dial
     property var sk
     property var acc                // accent [r,g,b,a]
     property var zones: [70, 85]
-    property real load: 0           // 0..1, the spring's position
-    property real loadFrom: 0       // where it was when the shutter opened
-    property real temp: 0           // normalised 0..1
-    property real tempFrom: 0
+    property real loadV: 0          // 0..1, the target
     property var tempC: null        // degrees, or null
+    property int glideMs: 700
     width: 176; height: 176
 
     readonly property real a0: 0.75 * Math.PI
@@ -26,8 +26,7 @@ Item {
     readonly property real sx: cx
     readonly property real sy: cy + rad * .73
     readonly property real sr: rad * .34
-    readonly property int lit: load > 0.001 ? Math.floor(F.clamp(load) * 50 + 0.05) : -1
-    readonly property int pct: Math.round(F.clamp(load) * 100)
+    readonly property int pct: Math.round(F.clamp(loadV) * 100)
     readonly property color accent: Skins.qt(acc)
     function ang(v) { return a0 + sweep * F.clamp(v) }
     function tnorm(t) { return (t - 20) / 80 }
@@ -80,74 +79,92 @@ Item {
         }
     }
 
-    // ticks lit up to the needle
-    Repeater {
-        model: 51
-        Rectangle {
-            readonly property bool major: index % 5 === 0
-            readonly property real a: dial.ang(index / 50)
-            visible: index <= dial.lit
-            x: dial.cx + Math.cos(a) * (dial.rad - (major ? 12 : 7))
-            y: dial.cy + Math.sin(a) * (dial.rad - (major ? 12 : 7)) - height / 2
-            width: major ? 8 : 3; height: major ? 1.6 : 1
-            rotation: a * 180 / Math.PI
-            transformOrigin: Item.Left
-            color: Skins.qt(dial.acc, major ? 1 : .75)
-            antialiasing: true
-        }
-    }
-
-    // The moving parts (value arc and both needles) are one canvas, repainted on each animation tick.
-    // Shapes would re-triangulate their paths in every polish pass, which cost several times more.
-    // One call per animation tick: set all four positions, then repaint once.
-    function move(l, lf, t, tf) { load = l; loadFrom = lf; temp = t; tempFrom = tf; live.requestPaint() }
-
+    // The lit part: glow, value arc and lit ticks, painted once per skin, revealed up to the needle by a shader.
     Canvas {
-        id: live
+        id: art
         anchors.fill: parent
         renderTarget: Canvas.Image
         renderStrategy: Canvas.Immediate
-        Connections {
-            target: dial
-            function onTempCChanged() { live.requestPaint() }
-            function onSkChanged() { live.requestPaint() }
-            function onAccChanged() { live.requestPaint() }
-        }
-        function needle(ctx, cx, cy, r0, r1, hw, fill, halo, haloW, from, to) {
-            var smear = Math.abs(to - from) * r1 > 1.2
-            for (var i = smear ? 0 : 3; i < 4; i++) {      // a few faint exposures, then the sharp one
-                ctx.save(); ctx.translate(cx, cy); ctx.rotate(from + (to - from) * i / 3)
-                ctx.globalAlpha = i === 3 ? 1 : .22
-                ctx.beginPath(); ctx.moveTo(r0, -hw); ctx.lineTo(r1, 0); ctx.lineTo(r0, hw); ctx.closePath()
-                if (i === 3 && haloW > 0) { ctx.strokeStyle = halo; ctx.lineWidth = haloW; ctx.lineJoin = "round"; ctx.stroke() }
-                ctx.fillStyle = fill; ctx.fill(); ctx.restore()
-            }
-        }
+        onPainted: arcTex.scheduleUpdate()
+        Connections { target: dial; function onSkChanged() { art.requestPaint() } function onAccChanged() { art.requestPaint() } }
         onPaint: {
             var sk = dial.sk
             if (!sk || width < 2) return
             var ctx = getContext("2d"); ctx.reset()
-            var glow = Math.min(1, sk.glow), u = F.clamp(dial.load), segs = [.35, .55, .75, .92, 1]
-            if (u > 0.004) {
-                ctx.lineCap = "round"; ctx.strokeStyle = Skins.css(dial.acc, .22 * glow); ctx.lineWidth = 4 + 6 * glow
-                ctx.beginPath(); ctx.arc(dial.cx, dial.cy, dial.ra, dial.a0, dial.a0 + dial.sweep * u); ctx.stroke()
-                ctx.lineWidth = 4
-                for (var k = 0; k < 5; k++) {       // alpha rises along the sweep (a canvas stroke has no gradient)
-                    var lo = k * .2, hi = Math.min(u, lo + .2)
-                    if (hi <= lo) break
-                    ctx.lineCap = k === 0 || k === 4 ? "round" : "butt"; ctx.strokeStyle = Skins.css(dial.acc, segs[k])
-                    ctx.beginPath(); ctx.arc(dial.cx, dial.cy, dial.ra, dial.a0 + dial.sweep * lo, dial.a0 + dial.sweep * hi); ctx.stroke()
-                }
+            var glow = Math.min(1, sk.glow), segs = [.35, .55, .75, .92, 1], cx = dial.cx, cy = dial.cy
+            ctx.lineCap = "round"; ctx.strokeStyle = Skins.css(dial.acc, .22 * glow); ctx.lineWidth = 4 + 6 * glow
+            ctx.beginPath(); ctx.arc(cx, cy, dial.ra, dial.a0, dial.a0 + dial.sweep); ctx.stroke()
+            ctx.lineWidth = 4
+            for (var k = 0; k < 5; k++) {       // alpha rises along the sweep (a canvas stroke has no gradient)
+                ctx.lineCap = k === 0 || k === 4 ? "round" : "butt"; ctx.strokeStyle = Skins.css(dial.acc, segs[k])
+                ctx.beginPath(); ctx.arc(cx, cy, dial.ra, dial.a0 + dial.sweep * k * .2, dial.a0 + dial.sweep * (k + 1) * .2); ctx.stroke()
             }
-            needle(ctx, dial.cx, dial.cy, dial.ra - 9, dial.rad - 2, 2.2, Skins.css(sk.needle),
-                   Skins.css(dial.acc, .9 * .28 * glow), 1 + 3 * glow, dial.ang(dial.loadFrom), dial.ang(dial.load))
-            if (dial.tempC !== null) {
-                var c = dial.tempC, tc = c >= dial.zones[1] ? sk.hot : c >= dial.zones[0] ? sk.warn : sk.cool
-                needle(ctx, dial.sx, dial.sy, dial.sr * .5, dial.sr - 1, 1.4, Skins.css(tc, .9), "", 0,
-                       dial.ang(dial.tempFrom), dial.ang(dial.temp))
+            ctx.lineCap = "butt"
+            for (var pass = 0; pass < 2; pass++) {       // lit ticks: minors, then majors
+                ctx.beginPath()
+                for (var i = 0; i <= 50; i++) {
+                    if ((i % 5 === 0) !== (pass === 1)) continue
+                    var a = dial.ang(i / 50), r0 = dial.rad - (pass ? 12 : 7), r1 = dial.rad - 4
+                    ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); ctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1)
+                }
+                ctx.lineWidth = pass ? 1.6 : 1; ctx.strokeStyle = Skins.css(dial.acc, pass ? 1 : .75); ctx.stroke()
             }
         }
     }
+    ShaderEffect {
+        id: arcFx
+        anchors.fill: parent
+        property variant src: ShaderEffectSource { id: arcTex; sourceItem: art; hideSource: true; live: false }
+        property real u: 0
+        property real a0: dial.a0
+        property real sweep: dial.sweep
+        property vector2d center: Qt.vector2d(dial.cx / width, dial.cy / height)
+        fragmentShader: Qt.resolvedUrl("shaders/sweep.frag.qsb")
+    }
+    UniformAnimator {
+        id: arcAnim
+        target: arcFx; uniform: "u"
+        duration: dial.glideMs; easing.type: Easing.OutCubic
+    }
+
+    // Needles. The load needle has two fainter copies that lag it, which is the motion blur.
+    Needle { id: ghost1; x: dial.cx; y: dial.cy; opacity: .22; r0: dial.ra - 9; r1: dial.rad - 2; hw: 2.2
+             fill: dial.sk ? Skins.qt(dial.sk.needle) : "white"; duration: Math.round(dial.glideMs * 1.3); easing: Easing.OutCubic }
+    Needle {
+        id: needle; x: dial.cx; y: dial.cy; r0: dial.ra - 9; r1: dial.rad - 2; hw: 2.2
+        fill: dial.sk ? Skins.qt(dial.sk.needle) : "white"
+        halo: dial.sk ? Skins.qt(dial.acc, .9 * .28 * Math.min(1, dial.sk.glow)) : "transparent"
+        haloW: dial.sk ? 1 + 3 * Math.min(1, dial.sk.glow) : 0
+        duration: dial.glideMs
+    }
+    Needle {
+        id: tneedle; x: dial.sx; y: dial.sy; visible: dial.tempC !== null
+        r0: dial.sr * .5; r1: dial.sr - 1; hw: 1.4
+        fill: {
+            if (!dial.sk || dial.tempC === null) return "white"
+            var c = dial.tempC
+            return Skins.qt(c >= dial.zones[1] ? dial.sk.hot : c >= dial.zones[0] ? dial.sk.warn : dial.sk.cool, .9)
+        }
+        duration: dial.glideMs
+    }
+
+    // One call per sample: aim the arc and the needles at the new load and temperature (0..1 each).
+    function aim(l, t, ms) {
+        loadV = l
+        var first = needle.shown !== needle.shown
+        needle.go(ang(l) * 180 / Math.PI); ghost1.go(ang(l) * 180 / Math.PI)
+        tneedle.go(ang(t) * 180 / Math.PI)
+        if (first) { arcFx.u = l; seededU = l; arcFrom = l }
+        else if (Math.abs(l - seededU) > .0005) {
+            var p = Math.min(1, (Date.now() - arcT0) / glideMs)
+            var cur = arcFrom + (seededU - arcFrom) * (1 - Math.pow(1 - p, 3))
+            arcAnim.stop(); arcAnim.from = cur; arcAnim.to = l; arcAnim.restart()
+            arcFrom = cur; arcT0 = Date.now(); seededU = l
+        }
+    }
+    property real seededU: 0
+    property real arcFrom: 0
+    property real arcT0: 0
 
     // readout: the big percentage, centred with its unit
     Text {
