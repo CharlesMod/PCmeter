@@ -727,7 +727,7 @@ body.gauge .rs { display: none; }
         <div class="temps" id="cpu-temps">
           <div class="tvals">
             <div class="vals" id="t-vals">—</div>
-            <div class="rng" id="t-rng"><button type="button" data-t="5m" data-r="300" aria-pressed="false">5m</button><button type="button" data-t="30m" data-r="1800" aria-pressed="true">30m</button><button type="button" data-t="2h" data-r="7200" aria-pressed="false">2h</button></div>
+            <div class="rng" id="t-rng"><button type="button" data-t="1m" data-r="60" aria-pressed="false">1m</button><button type="button" data-t="5m" data-r="300" aria-pressed="false">5m</button><button type="button" data-t="30m" data-r="1800" aria-pressed="true">30m</button><button type="button" data-t="2h" data-r="7200" aria-pressed="false">2h</button></div>
           </div>
           <canvas class="tchart" id="cpu-tchart" role="img" aria-label="Coolant, CPU die and GPU temperature history"></canvas>
           <div class="tcap"><span id="t-cap">Coolant, last 30 min</span><span id="t-max">die max —</span></div>
@@ -1356,9 +1356,10 @@ function stepDrift(now) {
 
 /* ---------- Temps tab: coolant, CPU die and GPU temperature history. /history seeds it (up to 2 h, one
    sample per 5 s); the stream then appends a sample every 5 s. Missing readings stay null and break the line. */
-const TH = { t: [], liq: [], die: [], gpu: [], ev: [], range: 1800, key: '', lastPush: 0, fanOn: undefined, hasFan: false,
+const TH = { t: [], liq: [], die: [], gpu: [], raw: { t: [], liq: [], die: [], gpu: [] }, f: 1, ev: [], range: 1800, key: '', lastPush: 0, fanOn: undefined, hasFan: false,
   live: { liq: null, die: null, gpu: null }, seenAt: 0, fetching: false };
-const TH_KEEP = 7200 + 60, TH_STEP = 5, TH_BREAK = 30;
+const TH_KEEP = 7200 + 60, TH_STEP = 5, TH_BREAK = 30, TH_RAW = 150;   // the 1m view uses every sample (kept for TH_RAW s), not the 5 s averages
+const tempsSrc = () => TH.range === 60 ? TH.raw : TH;
 const SERIES = [['liq', 'Coolant', 'LIQ'], ['die', 'Die', 'die'], ['gpu', 'GPU', 'GPU']];
 const tnum = v => typeof v === 'number' && isFinite(v) ? v : null;
 function tempsOn() { return $('cpu-card').classList.contains('cpu-temps') && !$('deck').classList.contains('gauge'); }
@@ -1372,6 +1373,9 @@ function tempsPush(d) {
   const now = Date.now() / 1000, c = d.cpu || {}, g = (d.gpus || []).find(x => !x.error) || {};
   const live = { liq: tnum(c.coolant_temp), die: tnum(c.temp), gpu: tnum(g.temp) };
   TH.live = live;
+  { const R = TH.raw; R.t.push(now); R.liq.push(live.liq); R.die.push(live.die); R.gpu.push(live.gpu);
+    let k = 0; while (k < R.t.length - 1 && R.t[k] < now - TH_RAW) k++;
+    if (k) for (const a of ['t', 'liq', 'die', 'gpu']) R[a].splice(0, k); }
   const fan = d.fan;
   if (fan && typeof fan === 'object') {
     TH.hasFan = true;
@@ -1399,6 +1403,12 @@ async function tempsFetch() {
       keep.t.push(TH.t[i]); keep.liq.push(TH.liq[i]); keep.die.push(TH.die[i]); keep.gpu.push(TH.gpu[i]);
     }
     Object.assign(TH, keep);
+    if (Array.isArray(h.raw)) {
+      const r = { t: [], liq: [], die: [], gpu: [] }, lastR = h.raw.length ? h.raw[h.raw.length - 1][0] : -Infinity;
+      for (const [t, liq, die, gpu] of h.raw) { r.t.push(t); r.liq.push(tnum(liq)); r.die.push(tnum(die)); r.gpu.push(tnum(gpu)); }
+      for (let i = 0; i < TH.raw.t.length; i++) if (TH.raw.t[i] > lastR + .01) { r.t.push(TH.raw.t[i]); r.liq.push(TH.raw.liq[i]); r.die.push(TH.raw.die[i]); r.gpu.push(TH.raw.gpu[i]); }
+      TH.raw = r;
+    }
     const ev = (Array.isArray(h.events) ? h.events : []).filter(e => typeof e.t === 'number').map(e => ({ t: e.t, on: !!e.on, trigger: e.trigger }));
     if (ev.length || TH.hasFan) { const tail = TH.ev.filter(e => e.t > (ev.length ? ev[ev.length - 1].t : -Infinity) + 1); TH.ev = ev.concat(tail); }
     if (ev.length) TH.hasFan = true;
@@ -1408,32 +1418,34 @@ async function tempsFetch() {
 }
 /* The window on screen: index of its first sample, the series that have any value in it. */
 function tempsWindow() {
-  const n = TH.t.length - 1; if (n < 0) return null;
-  const tEnd = TH.t[n], tStart = tEnd - TH.range; let i0 = 0;
-  while (i0 < n && TH.t[i0] < tStart) i0++;
+  const D = tempsSrc(), n = D.t.length - 1; if (n < 0) return null;
+  const tEnd = D.t[n], tStart = tEnd - TH.range; let i0 = 0;
+  while (i0 < n && D.t[i0] < tStart) i0++;
   const has = {};
-  for (const [k] of SERIES) { has[k] = false; for (let i = i0; i <= n; i++) if (TH[k][i] != null) { has[k] = true; break; } }
+  for (const [k] of SERIES) { has[k] = false; for (let i = i0; i <= n; i++) if (D[k][i] != null) { has[k] = true; break; } }
   return { n, i0, tEnd, tStart, has, lead: has.liq ? 'liq' : has.die ? 'die' : has.gpu ? 'gpu' : null };
 }
 function tempsText() {
-  const w = tempsWindow(), f = v => v == null ? '—' : Math.round(v) + '°';
-  const lastOf = k => { for (let i = TH.t.length - 1; i >= 0; i--) if (TH[k][i] != null) return TH[k][i]; return null; };
+  const D = tempsSrc(), w = tempsWindow(), f = v => v == null ? '—' : Math.round(v) + '°';
+  const lastOf = k => { for (let i = D.t.length - 1; i >= 0; i--) if (D[k][i] != null) return D[k][i]; return null; };
   const parts = [];
   if (w) for (const [k, , lbl] of SERIES) if (w.has[k]) parts.push(`<span${k === 'liq' ? ' class="liq"' : ''}>${f(TH.live[k] ?? lastOf(k))}</span><small>${lbl}</small>`);
   put('t-vals', parts.length ? parts.join('<i>·</i>') : '—', true);
-  const lbl = TH.range === 300 ? '5 min' : TH.range === 1800 ? '30 min' : '2 h';
+  const lbl = TH.range === 60 ? '1 min' : TH.range === 300 ? '5 min' : TH.range === 1800 ? '30 min' : '2 h';
   if (!w || !w.lead) { put('t-cap', `Collecting, last ${lbl}`); put('t-max', ''); return; }
-  const arr = TH[w.lead]; let first = null, lastV = null;
+  const arr = D[w.lead]; let first = null, lastV = null;
   for (let i = w.i0; i <= w.n; i++) if (arr[i] != null) { if (first == null) first = arr[i]; lastV = arr[i]; }
   const dl = Math.round(lastV - first);
   put('t-cap', `${w.lead === 'liq' ? 'Coolant' : w.lead === 'die' ? 'Die' : 'GPU'}, last ${lbl} ${dl === 0 ? '±' : dl > 0 ? '+' : '−'}${Math.abs(dl)}°`);
-  let mx = null; for (let i = w.i0; i <= w.n; i++) if (TH.die[i] != null && (mx == null || TH.die[i] > mx)) mx = TH.die[i];
+  let mx = null; for (let i = w.i0; i <= w.n; i++) if (D.die[i] != null && (mx == null || D.die[i] > mx)) mx = D.die[i];
   put('t-max', mx == null ? '' : `die max ${Math.round(mx)}°`);
 }
 function drawTemps(canvas) {
   const s = fit(canvas); if (!s) return;
   const { ctx, w, h } = s, W8 = tempsWindow(); if (!W8 || !W8.lead) return;
-  const { n, i0, tEnd, tStart, has, lead } = W8;
+  const D = tempsSrc(), f = TH.range === 60 ? TH.f : 1;   // 1m: the newest point is drawn in between the last two samples, one sample behind
+  const { n, i0, has, lead } = W8;
+  const tEnd = f < 1 && n > 0 ? D.t[n - 1] + (D.t[n] - D.t[n - 1]) * f : W8.tEnd, tStart = tEnd - TH.range;
   const lPad = 30, rPad = 4, tPad = 4, bPad = 3, W = w - lPad - rPad, H = h - tPad - bPad;
   const X = t => lPad + (t - tStart) / TH.range * W, Y = v => tPad + H - clamp((v - 20) / 80) * H;
   if (has.liq) {   // bands are coolant bands: warm 40-50, hot 50+
@@ -1471,9 +1483,10 @@ function drawTemps(canvas) {
   const runs = k => {
     const out = []; let cur = [];
     for (let i = i0 > 0 ? i0 - 1 : 0; i <= n; i++) {
-      const v = TH[k][i];
-      if (v == null || (cur.length && TH.t[i] - TH.t[i - 1] > TH_BREAK)) { if (cur.length) out.push(cur); cur = []; }
-      if (v != null) cur.push([X(TH.t[i]), Y(v)]);
+      let t = D.t[i], v = D[k][i];
+      if (i === n && f < 1 && n > 0) { const p = D[k][n - 1]; t = tEnd; v = v == null || p == null ? v : p + (v - p) * f; }
+      if (v == null || (cur.length && t - D.t[i - 1] > TH_BREAK)) { if (cur.length) out.push(cur); cur = []; }
+      if (v != null) cur.push([X(t), Y(v)]);
     }
     if (cur.length) out.push(cur);
     return out;
@@ -1704,7 +1717,8 @@ function frame(t) {
     drawSpark(canvas, spec, f);
   }
   if (tempsOn()) {
-    const tc = $('cpu-tchart'), k = `${TH.t.length}|${TH.range}|${TH.ev.length}|${TH.fanOn}`;
+    const tc = $('cpu-tchart'), D = tempsSrc(); TH.f = f;
+    const k = `${D.t.length}|${TH.range}|${TH.ev.length}|${TH.fanOn}|${TH.range === 60 ? Math.round(f * 20) : ''}`;
     if (!document.hidden) TH.seenAt = Date.now() / 1000;
     if (k !== TH.key || stale.has(tc)) { TH.key = k; stale.delete(tc); drawTemps(tc); }
   }

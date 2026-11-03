@@ -38,7 +38,7 @@ try:
 except ImportError:
     pynvml = None
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 # A PyInstaller build unpacks the web UI next to the code in sys._MEIPASS.
 WEB_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "web"
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -745,9 +745,11 @@ def subtract_display(g, baseline):
 
 
 class History:
-    """Ring buffer of 5 s averages (coolant, die, gpu0 temps) plus fan override events."""
+    """Ring buffer of 5 s averages (coolant, die, gpu0 temps) plus fan override events, and the last
+    RAW_SECONDS of readings exactly as sampled (every sample, not averaged) for the 1 minute view."""
     BUCKET = 5.0
     MAXLEN = 1440   # 2 h
+    RAW_SECONDS = 150.0
 
     def __init__(self, bucket=BUCKET, maxlen=MAXLEN):
         self.bucket = bucket
@@ -757,9 +759,14 @@ class History:
         self.lock = threading.Lock()
         self.start = None
         self.acc = [[0.0, 0], [0.0, 0], [0.0, 0]]
+        self.raw = deque()
 
     def add(self, t, coolant, die, gpu):
         """Feed one reading (None for missing); flushes a sample once a bucket has elapsed."""
+        with self.lock:
+            self.raw.append([round(t, 2)] + [round(v, 2) if isinstance(v, (int, float)) else None for v in (coolant, die, gpu)])
+            while self.raw and t - self.raw[0][0] > self.RAW_SECONDS:
+                self.raw.popleft()
         if self.start is None:
             self.start = t
         for a, v in zip(self.acc, (coolant, die, gpu)):
@@ -777,14 +784,26 @@ class History:
         with self.lock:
             self.events.append({"t": round(t, 1), "on": on, "trigger": trigger})
 
+    def recent(self, seconds):
+        """The last `seconds` of raw readings and the fan events from then on (cheap: for the 1 minute view)."""
+        with self.lock:
+            raw = list(self.raw)
+            events = list(self.events)
+        if raw:
+            lo = raw[-1][0] - seconds
+            raw = [r for r in raw if r[0] >= lo]
+            events = [e for e in events if e["t"] >= lo]
+        return {"samples": raw, "events": events}
+
     def payload(self):
         with self.lock:
             samples = list(self.samples)
             events = list(self.events)
+            raw = list(self.raw)
         if samples:
             cutoff = samples[0][0]
             events = [e for e in events if e["t"] >= cutoff]
-        return {"interval": int(self.bucket), "samples": samples, "events": events}
+        return {"interval": int(self.bucket), "samples": samples, "events": events, "raw": raw}
 
 
 FANCTL_PATHS = ("/run/fanctl/state.json", "/run/host/run/fanctl/state.json")
@@ -893,18 +912,21 @@ class Telemetry:
             # A stream (the browser page) shows everything; gadgets only what their views show.
             want = self.want if self.clients == 0 else {"cpu": FULL, "gpu": FULL}
             gpus = []
+            gwant = want["gpu"]
+            if gwant is None and want["cpu"] is not None:
+                gwant = {"procs": False, "full": False}     # the Temps history wants the GPU temperature too
             for gpu, baseline in zip(self.gpus, self.baselines):
-                if want["gpu"] is None:
+                if gwant is None:
                     break
                 try:
-                    gpus.append(subtract_display(gpu.sample(**want["gpu"]), baseline))
+                    gpus.append(subtract_display(gpu.sample(**gwant), baseline))
                 except Exception as exc:  # one flaky device should not stop the stream
                     gpus.append({"name": gpu.name, "vendor": gpu.vendor, "error": str(exc)})
             now = time.time()
             cpu = self.cpu.sample(**want["cpu"]) if want["cpu"] is not None else None
             fan = self.fan.read(now)
-            if cpu is not None:
-                self.history.add(now, cpu.get("coolant_temp"), cpu.get("temp"),
+            if cpu is not None or gpus:
+                self.history.add(now, cpu.get("coolant_temp") if cpu else None, cpu.get("temp") if cpu else None,
                                  gpus[0].get("temp") if gpus else None)
             snap = {
                 "t": now,
@@ -1085,8 +1107,8 @@ def main():
     def start():
         """Start sampling and serving; returns (telemetry, server, url)."""
         telemetry = Telemetry(args.interval, args.amd_peak_bw,
-                              CoolantSensor(args.temp_source, args.liquidctl),
-                              args.fanctl_state)
+                              coolant=CoolantSensor(args.temp_source, args.liquidctl),
+                              fanctl=args.fanctl_state)
         try:
             server = ThreadingHTTPServer((args.host, args.port), make_handler(telemetry))
         except OSError:
@@ -1104,7 +1126,9 @@ def main():
         # Qt owns the main thread; the sampler runs beside it and feeds the windows directly (no
         # server). It starts paused and samples only while a gadget is visible and the session unlocked.
         def start_sampler():
-            telemetry = Telemetry(args.interval, args.amd_peak_bw, proc_every=5.0)
+            telemetry = Telemetry(args.interval, args.amd_peak_bw, proc_every=5.0,
+                                   coolant=CoolantSensor(args.temp_source, args.liquidctl),
+                                   fanctl=args.fanctl_state)
             threading.Thread(target=telemetry.run, daemon=True).start()
             gpu_names = ", ".join(g.name for g in telemetry.gpus) or "none found"
             print(f"PCmeter {__version__}\n  CPU: {telemetry.cpu.name}\n  GPU: {gpu_names}", flush=True)

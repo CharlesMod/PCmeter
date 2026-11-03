@@ -81,8 +81,8 @@ Item {
     Item {                              // the head: a glow and a core on the line's moving end
         id: head
         x: sp.width - sp.pad; y: sp.yFrom; visible: sp.ready
-        Rectangle { property real r: sp.sk ? 2.4 + 3 * sp.sk.glow : 2.4; x: -r; y: -r; width: 2 * r; height: 2 * r; radius: r
-                    color: sp.sk ? Skins.qt(sp.acc, .25) : "transparent" }
-        Rectangle { x: -2.4; y: -2.4; width: 4.8; height: 4.8; radius: 2.4; color: sp.sk ? Skins.qt(sp.sk.needle) : "white" }
+        Rectangle { property real r: sp.sk ? 2.4 + 2 * Math.min(1, sp.sk.glow) : 2.4; x: -r; y: -r; width: 2 * r; height: 2 * r; radius: r
+                    color: sp.sk ? Skins.qt(sp.acc, .10) : "transparent" }
+        Rectangle { x: -2.4; y: -2.4; width: 4.8; height: 4.8; radius: 2.4; color: sp.sk ? Skins.qt(sp.acc, .95) : "white" }
     }
 }

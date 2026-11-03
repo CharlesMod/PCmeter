@@ -49,7 +49,16 @@ Item {
     property int sampleMs: 500
     // Every animation glides from one sample to the next, so motion is continuous (PCMETER_BURST=ms shortens it)
     readonly property int burst: host.burstMs > 0 ? Math.min(host.burstMs, sampleMs) : Math.round(sampleMs * 1.04)
-    readonly property var zones: isCpu ? [70, 85] : [70, 83]
+    // The processor dial shows the coolant temperature (scale 20-60, zones 40/50, tag LIQ) when the machine has a
+    // coolant sensor, else the die temperature, as in the web card.
+    property bool liq: false
+    readonly property real tmin: 20
+    readonly property real tmax: isCpu && liq ? 60 : 100
+    readonly property var zones: isCpu ? (liq ? [40, 50] : [70, 85]) : [70, 83]
+    property var live: ({ liq: null, die: null, gpu: null })
+    property var fanOn: undefined
+    property real histT: 0
+    readonly property bool temps: isCpu && !gauge && host.tab === "temps"
 
     function nowS() { return Date.now() / 1000 }
     Connections {
@@ -59,7 +68,7 @@ Item {
         }
     }
 
-    function tnorm(t) { return t === null || t === undefined ? 0 : F.clamp((t - 20) / 80) }
+    function tnorm(t) { return t === null || t === undefined ? 0 : F.clamp((t - tmin) / (tmax - tmin)) }
     function ingest(d) {
         if (!d) return
         var c = d.cpu, g = null, i
@@ -69,7 +78,16 @@ Item {
             if (!c) return
             var u = (c.util_avg !== undefined ? c.util_avg : (c.util || 0)) / 100     // the dial shows the 3 s mean
             var ur = (c.util || 0) / 100
-            loadT = u; tempC = c.temp; tempT = tnorm(c.temp); geiger.u = ur
+            var isLiq = c.temp_source === "coolant" && typeof c.coolant_temp === "number"
+            var tc = isLiq ? c.coolant_temp : c.temp
+            liq = isLiq
+            var g0 = null
+            for (i = 0; i < (d.gpus || []).length; i++) if (!d.gpus[i].error) { g0 = d.gpus[i]; break }
+            live = { liq: typeof c.coolant_temp === "number" ? c.coolant_temp : null, die: typeof c.temp === "number" ? c.temp : null,
+                     gpu: g0 && typeof g0.temp === "number" ? g0.temp : null }
+            fanOn = d.fan && typeof d.fan === "object" ? !!d.fan.override : undefined
+            histT = host.trange <= 120 ? (d.t || 0) : (d.hist_t || 0)
+            loadT = u; tempC = tc; tempT = tnorm(tc); geiger.u = ur
             nameText = c.name || "—"
             subText = c.cores ? c.cores + " cores · " + c.threads + " threads" : c.threads + " threads"
             r.a = [c.freq_mhz ? F.fmt(c.freq_mhz / 1000, 2) : "—", c.freq_mhz ? "GHz" : ""]
@@ -180,11 +198,26 @@ Item {
                 id: headCol
                 width: parent.width - (root.compact ? 100 : 0) - 44
                 spacing: 1
-                Text {
+                Row {
                     visible: !root.gauge
-                    text: root.isCpu ? "PROCESSOR" : "GRAPHICS"
-                    font.pixelSize: 10; font.weight: Font.DemiBold; font.letterSpacing: 1.4
-                    font.family: root.sk.ui; color: Skins.qt(root.sk.ink3)
+                    spacing: 14
+                    Text {
+                        text: root.isCpu ? "PROCESSOR" : "GRAPHICS"
+                        font.pixelSize: 10; font.weight: Font.DemiBold; font.letterSpacing: 1.4
+                        font.family: root.sk.ui; color: Skins.qt(root.sk.ink3)
+                    }
+                    Repeater {
+                        model: root.isCpu ? [["live", "LIVE"], ["temps", "TEMPS"]] : []
+                        Text {
+                            required property var modelData
+                            readonly property bool on: (root.host.tab === "temps") === (modelData[0] === "temps")
+                            text: modelData[1]
+                            font.pixelSize: 10; font.letterSpacing: 1.4; font.family: root.sk.ui
+                            font.weight: on ? Font.Bold : Font.Normal
+                            color: on ? Skins.qt(root.acc) : Skins.qt(root.sk.ink3)
+                            MouseArea { anchors.fill: parent; anchors.margins: -4; onClicked: root.host.tab = modelData[0] }
+                        }
+                    }
                 }
                 Clip {
                     width: parent.width; height: 24
@@ -238,33 +271,43 @@ Item {
         }
 
         // ---- instrument
-        Flow {
-            id: inst
-            visible: root.present
-            width: parent.width; spacing: 14
-            Dial {
-                id: dial
-                sk: root.sk; acc: root.acc; zones: root.zones; tempC: root.tempC
-                x: root.narrow || root.gauge ? (parent.width - width) / 2 : 0
+        Item {
+            id: stage
+            width: parent.width; height: inst.height
+            Flow {
+                id: inst
+                visible: root.present && !root.temps
+                width: parent.width; spacing: 14
+                Dial {
+                    id: dial
+                    sk: root.sk; acc: root.acc; zones: root.zones; tempC: root.tempC
+                    tmin: root.tmin; tmax: root.tmax; tag: root.isCpu && root.liq ? "LIQ" : ""
+                    x: root.narrow || root.gauge ? (parent.width - width) / 2 : 0
+                }
+                Column {
+                    visible: !root.gauge
+                    width: root.narrow ? parent.width : parent.width - dial.width - inst.spacing
+                    spacing: 0
+                    ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Clock" : "Core clock"; value: root.rows.a ? root.rows.a[0] : "—"; unit: root.rows.a ? root.rows.a[1] : "" }
+                    ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Package power" : "Board power"; value: root.rows.b ? root.rows.b[0] : "—"; unit: root.rows.b ? root.rows.b[1] : "" }
+                    ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Load avg" : "Fan"; value: root.rows.c ? root.rows.c[0] : "—"; unit: root.rows.c ? root.rows.c[1] : "" }
+                    ReadRow {
+                        width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Busiest thread" : "VRAM"
+                        meter: !root.isCpu; frac: root.vramFrac; glide: root.burst
+                        value: root.rows.d ? root.rows.d[0] : "—"; unit: root.rows.d ? root.rows.d[1] : ""
+                    }
+                    Item {
+                        width: parent.width; height: 8 + 14 + 4 + 38
+                        Text { y: 8; text: "LOAD, LAST 60 S"; font.pixelSize: 10; font.letterSpacing: 1.1; font.family: root.sk.ui; color: Skins.qt(root.sk.ink3) }
+                        Text { y: 8; anchors.right: parent.right; text: root.peakText; font.pixelSize: 11; font.family: root.sk.num; color: Skins.qt(root.sk.ink2) }
+                        Spark { y: 26; width: parent.width; height: 38; sk: root.sk; acc: root.acc; series: root.hist; rev: root.rev; glide: root.sampleMs }
+                    }
+                }
             }
-            Column {
-                visible: !root.gauge
-                width: root.narrow ? parent.width : parent.width - dial.width - inst.spacing
-                spacing: 0
-                ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Clock" : "Core clock"; value: root.rows.a ? root.rows.a[0] : "—"; unit: root.rows.a ? root.rows.a[1] : "" }
-                ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Package power" : "Board power"; value: root.rows.b ? root.rows.b[0] : "—"; unit: root.rows.b ? root.rows.b[1] : "" }
-                ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Load avg" : "Fan"; value: root.rows.c ? root.rows.c[0] : "—"; unit: root.rows.c ? root.rows.c[1] : "" }
-                ReadRow {
-                    width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Busiest thread" : "VRAM"
-                    meter: !root.isCpu; frac: root.vramFrac; glide: root.burst
-                    value: root.rows.d ? root.rows.d[0] : "—"; unit: root.rows.d ? root.rows.d[1] : ""
-                }
-                Item {
-                    width: parent.width; height: 8 + 14 + 4 + 38
-                    Text { y: 8; text: "LOAD, LAST 60 S"; font.pixelSize: 10; font.letterSpacing: 1.1; font.family: root.sk.ui; color: Skins.qt(root.sk.ink3) }
-                    Text { y: 8; anchors.right: parent.right; text: root.peakText; font.pixelSize: 11; font.family: root.sk.num; color: Skins.qt(root.sk.ink2) }
-                    Spark { y: 26; width: parent.width; height: 38; sk: root.sk; acc: root.acc; series: root.hist; rev: root.rev; glide: root.sampleMs }
-                }
+            Temps {
+                visible: root.temps; anchors.fill: parent
+                sk: root.sk; acc: root.acc; host: root.host; feed: root.feed
+                shown: root.temps; live: root.live; fanOn: root.fanOn; histT: root.histT
             }
         }
         Text {

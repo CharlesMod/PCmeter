@@ -14,6 +14,9 @@ Item {
     property var zones: [70, 85]
     property real loadV: 0          // 0..1, the target
     property var tempC: null        // degrees, or null
+    property real tmin: 20          // the temperature scale: 20..100 for a die, 20..60 for coolant
+    property real tmax: 100
+    property string tag: ""         // source tag under the reading ("LIQ" for coolant)
     property int glideMs: 700
     width: 176; height: 176
 
@@ -29,7 +32,7 @@ Item {
     readonly property int pct: Math.round(F.clamp(loadV) * 100)
     readonly property color accent: Skins.qt(acc)
     function ang(v) { return a0 + sweep * F.clamp(v) }
-    function tnorm(t) { return (t - 20) / 80 }
+    function tnorm(t) { return (t - tmin) / (tmax - tmin) }
     function zoneColor(c) {
         return Skins.qt(c >= zones[1] ? sk.hot : c >= zones[0] ? sk.warn : sk.cool, .9)
     }
@@ -39,7 +42,7 @@ Item {
         anchors.fill: parent
         renderTarget: Canvas.Image
         renderStrategy: Canvas.Immediate
-        Connections { target: dial; function onSkChanged() { face.requestPaint() } function onZonesChanged() { face.requestPaint() } }
+        Connections { target: dial; function onSkChanged() { face.requestPaint() } function onZonesChanged() { face.requestPaint() } function onTminChanged() { face.requestPaint() } function onTmaxChanged() { face.requestPaint() } }
         onPaint: {
             var sk = dial.sk
             if (!sk) return
@@ -69,7 +72,7 @@ Item {
             ctx.fillText("LOAD", cx, cy - rad * .26)
             ctx.beginPath(); ctx.arc(dial.sx, dial.sy, dial.sr, 0, Math.PI * 2)
             ctx.fillStyle = Skins.css(sk.disc); ctx.fill(); ctx.strokeStyle = fgc(.14); ctx.lineWidth = 1; ctx.stroke()
-            var z = dial.zones, bands = [[20, z[0], sk.cool], [z[0], z[1], sk.warn], [z[1], 100, sk.hot]]
+            var z = dial.zones, bands = [[dial.tmin, z[0], sk.cool], [z[0], z[1], sk.warn], [z[1], dial.tmax, sk.hot]]
             ctx.lineCap = "butt"; ctx.lineWidth = 2.5
             for (var b = 0; b < 3; b++) {
                 ctx.beginPath()
@@ -188,5 +191,12 @@ Item {
         font.family: dial.sk ? dial.sk.num : ""; font.pixelSize: Math.round(dial.sr * .42)
         color: dial.sk ? Skins.qt(dial.sk.ink) : "white"
         x: dial.sx - width / 2; y: dial.sy + 1 - height / 2
+    }
+    Text {
+        visible: dial.tag !== "" && dial.tempC !== null
+        text: dial.tag
+        font.family: dial.sk ? dial.sk.ui : ""; font.pixelSize: Math.max(6, Math.round(dial.sr * .26)); font.weight: Font.DemiBold
+        color: dial.sk ? Skins.qt(dial.sk.ink3) : "white"
+        x: dial.sx - width / 2; y: dial.sy + dial.sr * .5 - height / 2
     }
 }

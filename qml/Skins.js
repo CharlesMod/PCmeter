@@ -40,7 +40,7 @@ var skins = {
         faceHi: rgba(255, 255, 255, .07), faceLo: rgba(0, 0, 0, .22), glow: 1, pane: .80
     }),
     matrix: make({
-        fg: [90, 255, 140],
+        fg: [90, 255, 140], chartTint: "accent",       // the Temps chart tints with the phosphor, not with red
         wallpaper: { base: hex("#010603"), scan: rgba(0, 255, 90, .035), radials: [[70, 50, 50, 0, hex("#06301a")]] },
         ink: hex("#c9ffd8"), ink2: rgba(110, 255, 150, .72), ink3: rgba(70, 220, 115, .48),
         hair: rgba(57, 255, 106, .14), edge: rgba(57, 255, 106, .38), well: rgba(0, 22, 8, .7),

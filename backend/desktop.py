@@ -103,6 +103,7 @@ class Feed(QObject):
         self._logged = 0.0
         self._arrive.connect(self._store)          # queued: delivered on the Qt thread
         self._avg = {}                             # key -> deque of (time, util): the dial's 3 s window
+        self.history = None                        # the sampler's temperature History, set by the controller
 
     def push(self, snap):
         self._arrive.emit(snap)
@@ -128,6 +129,9 @@ class Feed(QObject):
         if gpus:
             snap["gpus"] = [dict(g, util_avg=self._smooth("gpu%d" % i, g["util"], now))
                             if g.get("util") is not None else g for i, g in enumerate(gpus)]
+        if self.history is not None:               # a new 5 s temperature row: the Temps tab reloads
+            with self.history.lock:
+                snap["hist_t"] = self.history.samples[-1][0] if self.history.samples else 0
         self._snap = snap
         if DEBUG:
             ua = [cpu and cpu.get("util_avg")] + [g.get("util_avg") for g in snap.get("gpus") or []]
@@ -141,6 +145,24 @@ class Feed(QObject):
         self.snapshotChanged.emit()
 
     snapshot = Property("QVariant", lambda self: self._snap, notify=snapshotChanged)
+
+    @Slot(int, result="QVariant")
+    def tempHistory(self, seconds):
+        """The last `seconds` of the temperature history (5 s rows: t, coolant, die, gpu) and the fan events."""
+        if self.history is None:
+            return {"samples": [], "events": []}
+        if seconds <= 120:                         # the 1 minute view: every sample, not 5 s averages
+            return self.history.recent(seconds + 5)
+        p = self.history.payload()
+        rows = p["samples"]
+        if rows:
+            lo = rows[-1][0] - seconds - 60
+            rows = [r for r in rows if r[0] >= lo]
+            p["events"] = [e for e in p["events"] if e["t"] >= lo]
+        p["samples"] = rows
+        if DEBUG:
+            print("pcmeter: temps history rows=%d events=%d last=%s" % (len(rows), len(p["events"]), rows[-1:] ), file=sys.stderr, flush=True)
+        return p
 
 
 class Bridge(QObject):
@@ -161,6 +183,17 @@ class Bridge(QObject):
     view = Property(str, lambda self: self.gadget.ctl.view, notify=viewChanged)
     sound = Property(bool, lambda self: self.gadget.ctl.sound, notify=soundChanged)
     burstMs = Property(int, lambda self: BURST_MS, constant=True)   # how long the animators run after each sample
+
+    # the processor card's Live / Temps tab and the Temps time range (seconds); PCMETER_TAB=temps starts on Temps
+    tabChanged, rangeChanged = Signal(), Signal()
+    tab = Property(str, lambda self: str(self.gadget.ctl.store.value("cpu/tab", os.environ.get("PCMETER_TAB", "live"))),
+                   lambda self, v: self._set_shared("cpu/tab", v, self.tabChanged), notify=tabChanged)
+    trange = Property(int, lambda self: int(os.environ.get("PCMETER_RANGE") or self.gadget.ctl.store.value("cpu/range", 1800)),
+                      lambda self, v: self._set_shared("cpu/range", v, self.rangeChanged), notify=rangeChanged)
+
+    def _set_shared(self, key, value, signal):
+        self.gadget.ctl.store.setValue(key, value)
+        signal.emit()
 
     # on screen and awake: false while the card is hidden or minimised and while the session is locked
     active = Property(bool, lambda self: self._active, notify=activeChanged)
@@ -390,6 +423,7 @@ class Controller(QObject):
         super().__init__(app)
         self.app, self.telemetry, self.bus = app, telemetry, bus
         self.feed = Feed(self)
+        self.feed.history = getattr(telemetry, "history", None)
         telemetry.listeners.append(self.feed.push)
         self.engine = QQmlEngine(self)
         self.engine.quit.connect(self.quit)
@@ -456,8 +490,25 @@ class Controller(QObject):
             n[0] += 1
             if n[0] < 10:
                 QTimer.singleShot(40, burst)
-        QTimer.singleShot(12000, shoot)
-        QTimer.singleShot(14000, burst)
+        after = int(os.environ.get("PCMETER_SHOTS_AFTER", "12")) * 1000
+        skins = [x for x in os.environ.get("PCMETER_SKINS", "").split(",") if x]
+        orig = self.skin
+        def per_skin(i=[0]):                  # PCMETER_SKINS=a,b,c: one grab of each card per skin, after the first delay
+            if i[0] >= len(skins):
+                self._set("skin", orig)       # put the keeper's skin back (it is stored)
+                return
+            self._set("skin", skins[i[0]])
+            def grab(name=skins[i[0]]):
+                for k, g in self.gadgets.items():
+                    if g.isVisible():
+                        g.grabWindow().save(f"{folder}/skin-{name}-{self.view}-{k}.png")
+            QTimer.singleShot(2500, grab)
+            i[0] += 1
+            QTimer.singleShot(4000, per_skin)
+        if skins:
+            QTimer.singleShot(after + 4000, per_skin)
+        QTimer.singleShot(after, shoot)
+        QTimer.singleShot(after + 2000, burst)
 
     def update_wants(self):
         """Ask the sampler for just what the visible cards show: the process list in the full view, the

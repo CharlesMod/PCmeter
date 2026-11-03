@@ -30,6 +30,17 @@ class Ring(unittest.TestCase):
         self.assertEqual(s[-1][0], 9.0)
         self.assertEqual(pm.History.MAXLEN, 1440)
 
+    def test_raw_minute(self):
+        h = pm.History()
+        for i in range(400):                       # 0.5 s samples for 200 s
+            h.add(i * 0.5, 30.0 + i * 0.01, None, 40.0)
+        raw = h.payload()["raw"]
+        self.assertEqual(raw[-1], [199.5, 33.99, None, 40.0])          # nothing averaged
+        self.assertEqual(raw[1][0] - raw[0][0], 0.5)                     # every sample kept
+        self.assertLessEqual(raw[-1][0] - raw[0][0], pm.History.RAW_SECONDS)
+        self.assertGreaterEqual(raw[-1][0] - raw[0][0], 120)             # covers the 1 minute window with room
+        self.assertEqual(len(h.payload()["samples"]), 36)                # the 5 s buckets are unchanged
+
     def test_events_window(self):
         h = pm.History(bucket=1)
         h.event(1.0, True, "cpu")
@@ -104,7 +115,8 @@ class Http(unittest.TestCase):
             d = json.load(urllib.request.urlopen(f"http://127.0.0.1:{srv.server_address[1]}/history"))
         finally:
             srv.shutdown(); srv.server_close()
-        self.assertEqual(d, {"interval": 1, "samples": [[2.5, 30.0, 40.0, 50.0]], "events": []})
+        self.assertEqual(d, {"interval": 1, "samples": [[2.5, 30.0, 40.0, 50.0]], "events": [],
+                             "raw": [[1.0, 30, 40, 50], [2.5, 30, 40, 50]]})
 
 
 if __name__ == "__main__":
