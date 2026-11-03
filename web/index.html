@@ -753,7 +753,7 @@ body.gauge .rs { display: none; }
         <summary><h3><svg class="caret" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5 7 5l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Top processes</h3><span class="clip" id="cpu-proc-cap"><span class="run">—</span></span></summary>
         <table class="procs">
           <colgroup><col><col style="width:62px"><col style="width:64px"><col style="width:78px"></colgroup>
-          <thead><tr><th scope="col">Process</th><th scope="col">PID</th><th scope="col">CPU</th><th scope="col">RAM</th></tr></thead>
+          <thead><tr><th scope="col">Process</th><th scope="col">PID</th><th scope="col" title="CPU as % of one core: 100% is one full core">% core</th><th scope="col">RAM</th></tr></thead>
           <tbody id="cpu-procs"></tbody>
         </table>
       </details>
@@ -1670,8 +1670,9 @@ function renderProcs(key, procs, memKey, emptyText, compact) {
   while (rows.length > procs.length) rows.pop().tr.remove();
   procs.forEach((p, i) => {
     const r = rows[i], v = r.v;
-    if (v.name !== p.name) { v.name = p.name; r.name.firstChild.textContent = p.name; r.name.title = p.name; toFit.add(r.name); }
-    const pid = String(p.pid), util = `${fmt(p.util)}%`, m = mem(p[memKey] || 0), bar = `scaleX(${clamp(p.util / 100).toFixed(3)})`;
+    const label = p.n > 1 ? `${p.name} ×${p.n}` : p.name;
+    if (v.name !== label) { v.name = label; r.name.firstChild.textContent = label; r.name.title = label; r.name.style.opacity = p.other ? .6 : ''; toFit.add(r.name); }
+    const pid = p.other ? '—' : String(p.pid), util = `${fmt(p.util)}%`, m = mem(p[memKey] || 0), bar = `scaleX(${clamp(p.util / 100).toFixed(3)})`;
     if (v.pid !== pid) r.pid.textContent = v.pid = pid;
     if (v.util !== util) r.util.textContent = v.util = util;
     if (v.mem !== m) r.mem.textContent = v.mem = m;

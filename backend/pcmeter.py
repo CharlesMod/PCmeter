@@ -370,6 +370,49 @@ class Rapl:
         return watts
 
 
+def group_procs(rows, limit=10):
+    """Merge the processes of one program (same executable, else the same name) into a single row: the
+    CPU shares and memory add up, `n` counts the processes and `pid` is the busiest member's. Sorted
+    busiest first."""
+    groups = {}
+    for r in rows:
+        key = r.get("exe") or r["name"]
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {"pid": r["pid"], "name": key, "util": 0.0, "mem_mb": 0.0, "n": 0, "_top": -1.0}
+        g["util"] += r["util"]
+        g["mem_mb"] += r["mem_mb"]
+        g["n"] += 1
+        if r["util"] > g["_top"]:
+            g["_top"], g["pid"] = r["util"], r["pid"]
+    out = sorted(groups.values(), key=lambda g: (g["util"], g["mem_mb"]), reverse=True)[:limit]
+    for g in out:
+        del g["_top"]
+    return out
+
+
+def with_other(procs, busy_pct, floor=0.5):
+    """Append the CPU the listed rows do not account for (programs that started and ended between two scans,
+    interrupt time, the unlisted tail) so the gap is visible: machine busy minus the listed rows, in the same
+    units (% of one core)."""
+    if busy_pct is None:
+        return procs
+    gap = busy_pct - sum(p["util"] for p in procs)
+    if gap < floor:
+        return procs
+    return procs + [{"pid": 0, "name": "other / short-lived", "util": gap, "mem_mb": 0.0, "n": 0, "other": True}]
+
+
+def cpu_busy_jiffies():
+    """Busy jiffies of the whole machine from /proc/stat (everything but idle and iowait), or None."""
+    try:
+        with open("/proc/stat", "rb") as f:
+            v = [int(x) for x in f.readline().split()[1:9]]
+    except (OSError, ValueError):
+        return None
+    return sum(v) - v[3] - (v[4] if len(v) > 4 else 0)
+
+
 class CpuSampler:
     def __init__(self, proc_every=1.0, coolant=None):
         self.proc_every = proc_every
@@ -382,6 +425,7 @@ class CpuSampler:
         self.procs = []
         self.next_proc_scan = 0.0
         self.prev_ticks, self.last_scan = {}, None
+        self.prev_busy, self.exes = None, {}
         psutil.cpu_percent(percpu=True)  # prime the counters
 
     def reset(self):
@@ -389,6 +433,7 @@ class CpuSampler:
         psutil.cpu_percent(percpu=True)
         self.rapl.last = None
         self.prev_ticks, self.last_scan = {}, None
+        self.prev_busy = None
         self.next_proc_scan = 0.0
 
     def _scan_procs(self):
@@ -397,10 +442,24 @@ class CpuSampler:
         else:
             self._scan_procs_psutil()
 
+    def _exe(self, pid):
+        """Executable name of a process (cached per pid), or None for kernel threads and the unreadable."""
+        if pid in self.exes:
+            return self.exes[pid]
+        try:
+            exe = os.path.basename(os.readlink(f"/proc/{pid}/exe")).removesuffix(" (deleted)") or None
+        except OSError:
+            exe = None
+        self.exes[pid] = exe
+        return exe
+
     def _scan_procs_linux(self):
-        """One read of /proc/<pid>/stat per process: name, CPU ticks and RSS are all in it."""
+        """One read of /proc/<pid>/stat per process: name, CPU ticks and RSS are all in it. Each process's CPU is
+        in % of ONE core (100 = a full core, as in top); processes of one program are grouped, and a row
+        for the busy time nobody listed (short-lived processes and the rest) is appended."""
         now = time.monotonic()
         dt = now - self.last_scan if self.last_scan else None
+        busy_now = cpu_busy_jiffies()
         ticks_now, found = {}, []
         for entry in os.scandir("/proc"):
             if not entry.name.isdigit():
@@ -416,25 +475,31 @@ class CpuSampler:
             ticks = int(fields[11]) + int(fields[12])   # utime + stime
             ticks_now[pid] = ticks
             if dt and pid in self.prev_ticks:
+                util = (ticks - self.prev_ticks[pid]) / CLK_TCK / dt * 100
                 found.append({
                     "pid": pid,
                     "name": data[data.find(b"(") + 1:close].decode(errors="replace"),
-                    "util": (ticks - self.prev_ticks[pid]) / CLK_TCK / dt * 100 / max(1, self.threads),
+                    "exe": self._exe(pid) if util > 0 else None,
+                    "util": util,
                     "mem_mb": int(fields[21]) * PAGE_SIZE / 2**20,
                 })
-        self.prev_ticks, self.last_scan = ticks_now, now
-        found.sort(key=lambda p: (p["util"], p["mem_mb"]), reverse=True)
-        self.procs = found[:10]
-        for p in self.procs:
-            if len(p["name"]) == 15:   # the kernel truncates names; take the full one from cmdline
+        self.exes = {pid: e for pid, e in self.exes.items() if pid in ticks_now}
+        busy = None
+        if dt and busy_now is not None and self.prev_busy is not None:
+            busy = (busy_now - self.prev_busy) / CLK_TCK / dt * 100
+        self.prev_ticks, self.last_scan, self.prev_busy = ticks_now, now, busy_now
+        for r in found:
+            if r["exe"] is None and len(r["name"]) == 15:   # the kernel truncates names; take the full one from cmdline
                 try:
-                    with open(f"/proc/{p['pid']}/cmdline", "rb") as f:
+                    with open(f"/proc/{r['pid']}/cmdline", "rb") as f:
                         argv0 = f.read().split(b"\0", 1)[0].split(b" ", 1)[0]
                     full = os.path.basename(argv0.decode(errors="replace"))
-                    if full.startswith(p["name"]):   # some programs rewrite argv; keep only a real match
-                        p["name"] = full
+                    if full.startswith(r["name"]):   # some programs rewrite argv; keep only a real match
+                        r["name"] = full
                 except OSError:
                     pass
+        procs = group_procs(found)
+        self.procs = with_other(procs, busy) if busy is not None else procs
 
     def _scan_procs_psutil(self):
         # process_iter caches Process objects, so cpu_percent measures since the previous scan.
@@ -446,12 +511,11 @@ class CpuSampler:
             found.append({
                 "pid": info["pid"],
                 "name": info["name"] or f"pid {info['pid']}",
-                # Share of the whole machine, matching the dial (top's per-core % / threads).
-                "util": info["cpu_percent"] / max(1, self.threads),
+                "util": info["cpu_percent"],       # % of one core, as in top
                 "mem_mb": info["memory_info"].rss / 2**20 if info["memory_info"] else 0,
             })
-        found.sort(key=lambda p: (p["util"], p["mem_mb"]), reverse=True)
-        self.procs = found[:10]
+        procs = group_procs(found)
+        self.procs = procs
 
     def sample(self, procs=True, full=True):
         """`procs`: some process list is on screen; `full`: the readouts beside the dial are too (not just the dial)."""

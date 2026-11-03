@@ -2,7 +2,8 @@ import QtQuick
 import "Skins.js" as Skins
 import "Fmt.js" as F
 
-// Top processes: name, PID, utilisation (with a thin bar) and memory. Rows are replaced when a new list
+// Top processes (a program's processes grouped into one row with a count; the CPU column is % of one core,
+// 100 = a full core; a last row "other / short-lived" holds the busy time no listed row accounts for): name, PID, utilisation (with a thin bar) and memory. Rows are replaced when a new list
 // arrives (every few seconds), not animated.
 Column {
     id: tbl
@@ -43,11 +44,12 @@ Column {
             readonly property var p: modelData
             Clip {
                 x: 0; y: 5; width: tbl.wName - 8; height: 17
-                text: p.name; pixelSize: 13; family: tbl.sk ? tbl.sk.ui : ""; color: tbl.sk ? Skins.qt(tbl.sk.ink) : "white"
+                text: p.n > 1 ? p.name + " ×" + p.n : p.name; pixelSize: 13; family: tbl.sk ? tbl.sk.ui : ""
+                color: tbl.sk ? Skins.qt(p.other ? tbl.sk.ink3 : tbl.sk.ink) : "white"
             }
             Text {
                 x: tbl.wName; width: tbl.wPid; y: 5; horizontalAlignment: Text.AlignRight
-                text: p.pid; font.pixelSize: 12; font.family: tbl.sk ? tbl.sk.num : ""; color: tbl.sk ? Skins.qt(tbl.sk.ink2) : "white"
+                text: p.other ? "—" : p.pid; font.pixelSize: 12; font.family: tbl.sk ? tbl.sk.num : ""; color: tbl.sk ? Skins.qt(tbl.sk.ink2) : "white"
             }
             Text {
                 x: tbl.wName + tbl.wPid; width: tbl.wUtil; y: 5; horizontalAlignment: Text.AlignRight

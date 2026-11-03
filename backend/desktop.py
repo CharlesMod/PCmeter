@@ -44,6 +44,7 @@ SKINS = (("glass", "Glass"), ("matrix", "Matrix"), ("hive", "Hive"), ("windows",
 VIEWS = (("full", "Full"), ("compact", "Compact"), ("gauge", "Gauges only"))
 DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH = 440, 340, 900
 MIN_ZOOM, MAX_ZOOM = 0.5, 3.0
+MIN_PX, MAX_PX = 240, 1320      # window width limits (the card scales, so these are zoom 0.55 and 3.0)
 # The cards are drawn by Qt Quick. "gpu" (default) uses its hardware renderer (RHI: OpenGL or Vulkan): on
 # a real desktop it idles near 0.3% of a core. "cpu" (PCMETER_RENDER=cpu) is the software renderer, for
 # hosts with no usable GL (about 15% of a core when drawing a 4K card).
@@ -236,10 +237,17 @@ class Bridge(QObject):
 
     @Slot(int)
     def startResize(self, edges):
-        edges &= int(Qt.Edge.LeftEdge.value | Qt.Edge.RightEdge.value)
-        if edges:
+        # the card's own bits (left 1, right 2) are not Qt's (Qt.LeftEdge is 2, Qt.RightEdge is 4): the right
+        # handle used to start a LEFT-edge resize and the left handle none at all
+        qt_edges = Qt.Edges()
+        if edges & 1:
+            qt_edges |= Qt.Edge.LeftEdge
+        if edges & 2:
+            qt_edges |= Qt.Edge.RightEdge
+        if qt_edges:
             self.gadget.mark_user_sized()
-            self.gadget.startSystemResize(Qt.Edges(edges))
+            self.gadget.begin_drag()
+            self.gadget.startSystemResize(qt_edges)
 
     @Slot(int, int, float)
     def setSize(self, width, height, radius):
@@ -285,7 +293,8 @@ class Gadget(QObject):
         self.sized = False
         self.zoom = 1.0
         self.last = None             # the card's last report (width, height, radius), in its own layout units
-        self.pending_size = False
+        self.dragging = False        # an edge drag is in progress: KWin owns the geometry, the app sets none
+        self.drag_idle = QTimer(self, singleShot=True, timeout=lambda: self.end_drag())
         stored = ctl.store.value(f"{key}/usersize")
         saved_w = ctl.store.value(f"{key}/width")
         # A size the keeper set by resizing is kept as saved. Older configs saved the width on every move,
@@ -309,9 +318,9 @@ class Gadget(QObject):
         win.setIcon(ctl.icon)
         self.width_saved = QTimer(self, singleShot=True, interval=500, timeout=self._save_geometry)
         width = int(saved_w) if self.user and saved_w is not None else round(DEFAULT_WIDTH * self.zoom)
-        win.setMinimumWidth(round(MIN_WIDTH * self.zoom))
-        win.setMaximumWidth(round(MAX_WIDTH * self.zoom))
-        win.resize(max(round(MIN_WIDTH * self.zoom), min(round(MAX_WIDTH * self.zoom), width)), 620)
+        win.setMinimumWidth(MIN_PX)
+        win.setMaximumWidth(MAX_PX)
+        win.resize(max(MIN_PX, min(MAX_PX, width)), 620)
         self.reveal = QTimer(self, singleShot=True, interval=2500, timeout=self._reveal)
         win.visibleChanged.connect(lambda _: ctl.update_presence())
         win.visibilityChanged.connect(lambda _: ctl.update_presence())
@@ -379,27 +388,30 @@ class Gadget(QObject):
         height = max(80, height)
         fixed = width > 0
         self.fixed_width = fixed
+        layout_w = width if fixed else DEFAULT_WIDTH     # the card is laid out at this width and only scaled
+        if self.dragging:
+            return                          # KWin owns the geometry until release
         if not self.user:
             target = max(120, self.work_height() // len(CARDS))
             zoom = max(MIN_ZOOM, min(MAX_ZOOM, target / height))
             win_h = target
+            win_w = round(layout_w * zoom)
         else:
-            zoom = self.zoom
+            if fixed or self.fixed_was:     # gauges view <-> full: the stored zoom decides the width
+                zoom = self.zoom
+            else:
+                zoom = max(MIN_ZOOM, min(MAX_ZOOM, self.width() / layout_w))
+            win_w = round(layout_w * zoom)
             win_h = round(height * zoom)
         if abs(zoom - self.zoom) > 1e-4:
             self.zoom = zoom
             self.bridge.zoomChanged.emit()
-        if fixed:                           # gauges view: exactly the dial's width
-            win_w = round(width * zoom)
+        if fixed:
             self.setMinimumWidth(win_w)
             self.setMaximumWidth(win_w)
         else:
-            self.setMinimumWidth(round(MIN_WIDTH * zoom))
-            self.setMaximumWidth(round(MAX_WIDTH * zoom))
-            if self.user:
-                win_w = int(self.ctl.store.value(f"{self.key}/width", self.width())) if self.fixed_was else self.width()
-            else:
-                win_w = round(DEFAULT_WIDTH * zoom)
+            self.setMinimumWidth(MIN_PX)
+            self.setMaximumWidth(MAX_PX)
         self.fixed_was = fixed
         if win_h != self.height() or not self.sized:
             self.setMinimumHeight(win_h)
@@ -408,7 +420,7 @@ class Gadget(QObject):
             self.resize(win_w, win_h)
         if DEBUG:
             print(f"[{self.key}] size layout={width}x{height} zoom={self.zoom:.3f} window={win_w}x{win_h} "
-                  f"work={self.work_height()} screen={(self.win.screen() or QGuiApplication.primaryScreen()).name()} user={self.user}", file=sys.stderr, flush=True)
+                  f"work={self.work_height()} user={self.user}", file=sys.stderr, flush=True)
         self.sized = True
         if self.wanted and not self.isVisible():
             self._reveal()
@@ -421,6 +433,28 @@ class Gadget(QObject):
         if not self.user and self.last:
             self.content_size(*self.last)
 
+    def begin_drag(self):
+        self.dragging = True
+        self.drag_idle.start(3000 if self.ctl.placer else 700)   # KWin reports the end; this is the backstop
+
+    def end_drag(self):
+        """The edge drag is over: keep the size as the keeper's, then give the card the height that fits it."""
+        if not self.dragging:
+            return
+        self.dragging = False
+        self.drag_idle.stop()
+        self._save_geometry()
+        # KWin still commits the last configure of the drag just after it reports the end; a height set now
+        # would be overwritten by it, so give it a moment.
+        QTimer.singleShot(300, self._after_drag)
+
+    def _after_drag(self):
+        if self.last and not self.fixed_width and not self.dragging:
+            self.zoom = max(MIN_ZOOM, min(MAX_ZOOM, self.width() / DEFAULT_WIDTH))
+            self.bridge.zoomChanged.emit()
+            self.content_size(*self.last)
+            self._save_geometry()
+
     def mark_user_sized(self):
         if not self.user:
             self.user = True
@@ -429,10 +463,17 @@ class Gadget(QObject):
 
     def _resized(self, *_):
         if DEBUG:
-            print(f"[{self.key}] geometry x={self.x()} y={self.y()} {self.width()}x{self.height()} user={self.user}",
-                  file=sys.stderr, flush=True)
+            print(f"[{self.key}] geometry {self.width()}x{self.height()} dragging={self.dragging} user={self.user} "
+                  f"(Qt x/y are placeholders on Wayland)", file=sys.stderr, flush=True)
         self.update_blur()
-        if self.isVisible():
+        if self.dragging:
+            # the card scales with the window while the keeper drags: no reflow, no geometry of its own
+            zoom = max(MIN_ZOOM, min(MAX_ZOOM, self.width() / DEFAULT_WIDTH))
+            if abs(zoom - self.zoom) > 1e-4:
+                self.zoom = zoom
+                self.bridge.zoomChanged.emit()
+            self.drag_idle.start(3000 if self.ctl.placer else 700)
+        elif self.isVisible():
             self.width_saved.start()
 
     def _moved(self, *_):
@@ -440,8 +481,11 @@ class Gadget(QObject):
             self.width_saved.start()
 
     def _save_geometry(self):
+        if self.dragging:
+            return
         if self.user and not self.fixed_width:
             self.ctl.store.setValue(f"{self.key}/width", self.width())
+            self.ctl.store.setValue(f"{self.key}/zoom", self.zoom)
         if not self.ctl.wayland and self.isVisible():
             self.ctl.store.setValue(f"{self.key}/pos", [self.x(), self.y()])
 
@@ -479,6 +523,19 @@ class Service(QObject):
     @Slot(str, int, int, int, int)
     def workArea(self, name, x, y, w, h):
         self.ctl.set_work_area(name, QRect(x, y, w, h))
+
+    @Slot(str, bool)
+    def resizeState(self, window_caption, on):
+        """KWin: an interactive resize of this card started (on) or finished."""
+        for key, label in CARDS:
+            if caption(label) == window_caption and not on:
+                self.ctl.gadgets[key].end_drag()
+
+    @Slot(str, int, int, int, int)
+    def frame(self, window_caption, left, top, right, bottom):
+        if DEBUG:
+            print(f"[kwin] {window_caption} frame left={left} top={top} right={right} bottom={bottom} "
+                  f"({right - left}x{bottom - top})", file=sys.stderr, flush=True)
 
     @Slot(str, int, int)
     def moved(self, window_caption, x, y):
@@ -671,7 +728,7 @@ class Controller(QObject):
             if isinstance(pos, (list, tuple)) and len(pos) == 2:
                 saved[caption(label)] = (int(pos[0]), int(pos[1]))
         order = [caption(label) for _, label in reversed(CARDS)]   # right to left: GPU, then CPU
-        self.placer.load(order, saved, self.above)
+        self.placer.load(order, saved, self.above, DEBUG)
 
     def window_moved(self, window_caption, x, y):
         for key, label in CARDS:

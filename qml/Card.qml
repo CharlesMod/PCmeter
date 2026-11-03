@@ -395,7 +395,7 @@ Item {
             ProcTable {
                 visible: root.host.fold
                 width: parent.width; sk: root.sk; acc: root.acc; rows: root.procs
-                colUtil: root.isCpu ? "CPU" : "GPU"; colMem: root.isCpu ? "RAM" : "VRAM"; memKey: root.isCpu ? "mem_mb" : "vram_mb"
+                colUtil: root.isCpu ? "% CORE" : "GPU"; colMem: root.isCpu ? "RAM" : "VRAM"; memKey: root.isCpu ? "mem_mb" : "vram_mb"
                 empty: root.isCpu ? "No process data." : "No processes are using the GPU."
                 opacity: visible ? 1 : 0
                 Behavior on opacity { NumberAnimation { duration: 160 } }
