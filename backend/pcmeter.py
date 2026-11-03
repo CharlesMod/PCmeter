@@ -252,7 +252,8 @@ class FanctlCoolant:
     def present(self):
         return any(os.path.exists(p) for p in self.paths)
 
-    def read(self):
+    def read_input(self, name):
+        """`inputs.<name>` of a fresh state file as a float, else None."""
         for p in self.paths:
             try:
                 st = os.stat(p)
@@ -261,21 +262,26 @@ class FanctlCoolant:
             key = (st.st_mtime_ns, st.st_size)
             hit = self.cache.get(p)
             if not hit or hit[0] != key:
-                t = c = None
+                t, inputs = None, {}
                 try:
                     with open(p) as f:
                         d = json.load(f)
                     t = d.get("t")
                     t = t if isinstance(t, (int, float)) and not isinstance(t, bool) else st.st_mtime
-                    c = (d.get("inputs") or {}).get("coolant")
-                    c = c if isinstance(c, (int, float)) and not isinstance(c, bool) else None
+                    inputs = d.get("inputs") if isinstance(d.get("inputs"), dict) else {}
                 except Exception:
                     pass
-                hit = self.cache[p] = (key, t, c)
-            _, t, c = hit
-            if c is not None and t is not None and 0 <= self.wall() - t <= self.STALE and _plausible(c):
-                return float(c)
+                hit = self.cache[p] = (key, t, inputs)
+            _, t, inputs = hit
+            v = inputs.get(name)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and t is not None \
+                    and 0 <= self.wall() - t <= self.STALE:
+                return float(v)
         return None
+
+    def read(self):
+        c = self.read_input("coolant")
+        return c if _plausible(c) else None
 
 
 class CoolantSensor:
@@ -413,6 +419,76 @@ def cpu_busy_jiffies():
     return sum(v) - v[3] - (v[4] if len(v) > 4 else 0)
 
 
+# ---------------------------------------------------------------- how close to a limit
+# The CPU and GPU dials show the closest of up to three headroom terms, each 0..100 % of its limit:
+#   POWER   package watts / the sustained power limit (PL1, or the board limit on a GPU)
+#   THERMAL (die temperature - T_IDLE_REF) / (throttle temperature - T_IDLE_REF); 100 % is the throttle point.
+#           T_IDLE_REF = 40 C: about what a die reads at idle in a normal room, so the scale starts near 0
+#           when idle and a die at 70 C reads 50 %.
+#   LOAD    utilisation
+# A missing source drops its term; the dial never shows less than the load.
+T_IDLE_REF = 40.0
+TERM_ORDER = ("POWER", "THERMAL", "LOAD")      # the tie-break, too
+
+
+def power_term(watts, limit_w):
+    if watts is None or not limit_w or limit_w <= 0:
+        return None
+    return max(0.0, min(100.0, watts / limit_w * 100))
+
+
+def thermal_term(temp, limit_c, ref=T_IDLE_REF):
+    if temp is None or limit_c is None or limit_c <= ref:
+        return None
+    return max(0.0, min(100.0, (temp - ref) / (limit_c - ref) * 100))
+
+
+def pick_limiter(terms):
+    """(value, name) of the largest available term; ties go to POWER, then THERMAL, then LOAD."""
+    best = None
+    for name in TERM_ORDER:
+        v = terms.get(name)
+        if v is not None and (best is None or v > best[0]):
+            best = (v, name)
+    return best if best else (None, None)
+
+
+def limit_info(util, temp, temp_limit, power_w, power_limit_w, throttled, **extra):
+    terms = {"POWER": power_term(power_w, power_limit_w), "THERMAL": thermal_term(temp, temp_limit),
+             "LOAD": None if util is None else max(0.0, min(100.0, float(util)))}
+    value, term = pick_limiter(terms)
+    return {"value": value, "term": term, "terms": terms, "throttled": bool(throttled),
+            "power_limit_w": power_limit_w, "temp_limit": temp_limit, **extra}
+
+
+class ThrottleWatch:
+    """True while a throttle counter (milliseconds or events, only ever rising) has risen within the last
+    `hold` seconds: a 0.5 s sample sees the counter move in only some of the samples, and the flag should not flicker."""
+
+    def __init__(self, hold=3.0):
+        self.hold, self.last, self.until = hold, None, 0.0
+
+    def update(self, counter, now):
+        if counter is not None:
+            if self.last is not None and counter > self.last:
+                self.until = now + self.hold
+            self.last = counter
+        return now < self.until
+
+
+INTEL_THROTTLE = "/sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_total_time_ms"
+RAPL_DIR = "/sys/class/powercap/intel-rapl:0"
+
+
+def rapl_pl1_watts(rapl_dir=RAPL_DIR):
+    """The sustained (long-term, PL1) package power limit in watts, or None."""
+    for i in range(3):
+        if _read(f"{rapl_dir}/constraint_{i}_name", str) == "long_term":
+            uw = _read(f"{rapl_dir}/constraint_{i}_power_limit_uw", int)
+            return uw / 1e6 if uw else None
+    return None
+
+
 class CpuSampler:
     def __init__(self, proc_every=1.0, coolant=None):
         self.proc_every = proc_every
@@ -426,6 +502,13 @@ class CpuSampler:
         self.next_proc_scan = 0.0
         self.prev_ticks, self.last_scan = {}, None
         self.prev_busy, self.exes = None, {}
+        self.fanctl = getattr(self.coolant, "fanctl", None)
+        self.throttle = ThrottleWatch()
+        self.throttle_file = INTEL_THROTTLE if os.path.exists(INTEL_THROTTLE) else None
+        self.pl1, self.pl1_at = None, 0.0
+        self.tjmax = None
+        if self.temp_file:
+            self.tjmax = (_read(str(self.temp_file).replace("_input", "_crit"), int) or 0) / 1000 or 100.0
         psutil.cpu_percent(percpu=True)  # prime the counters
 
     def reset(self):
@@ -435,6 +518,21 @@ class CpuSampler:
         self.prev_ticks, self.last_scan = {}, None
         self.prev_busy = None
         self.next_proc_scan = 0.0
+
+    def _power(self):
+        """Package watts: RAPL when readable, else fanctl's published `inputs.power`."""
+        w = self.rapl.watts()
+        if w is None and self.fanctl is not None:
+            w = self.fanctl.read_input("power")
+        return w
+
+    def _limit(self, util, temp, power_w):
+        now = time.monotonic()
+        if now - self.pl1_at > 30:
+            self.pl1, self.pl1_at = rapl_pl1_watts(), now
+        counter = _read(self.throttle_file, int) if self.throttle_file else None
+        return limit_info(util, temp, self.tjmax if temp is not None else None, power_w, self.pl1,
+                          self.throttle.update(counter, now))
 
     def _scan_procs(self):
         if platform.system() == "Linux":
@@ -528,11 +626,13 @@ class CpuSampler:
             self.prev_ticks = {}
             self.next_proc_scan = 0.0
         per_core = psutil.cpu_percent(percpu=True)
+        util = sum(per_core) / max(1, len(per_core))
+        temp = _read(self.temp_file, int) / 1000 if self.temp_file else cpu_temp()
+        power = self._power()
         if not full:
             return {"name": self.name, "cores": self.cores, "threads": self.threads,
-                    "util": sum(per_core) / max(1, len(per_core)), "per_core": per_core,
-                    "temp": _read(self.temp_file, int) / 1000 if self.temp_file else cpu_temp(),
-                    "freq_mhz": None, "power_w": None, "load": None, "procs": []}
+                    "util": util, "per_core": per_core, "temp": temp, "limit": self._limit(util, temp, power),
+                    "freq_mhz": None, "power_w": power, "load": None, "procs": []}
         freq = psutil.cpu_freq()
         try:
             load = list(psutil.getloadavg())
@@ -543,11 +643,12 @@ class CpuSampler:
             "name": self.name,
             "cores": self.cores,
             "threads": self.threads,
-            "util": sum(per_core) / max(1, len(per_core)),
+            "util": util,
             "per_core": per_core,
-            "temp": _read(self.temp_file, int) / 1000 if self.temp_file else cpu_temp(),
+            "temp": temp,
+            "limit": self._limit(util, temp, power),
             "freq_mhz": freq.current if freq else None,
-            "power_w": self.rapl.watts(),
+            "power_w": power,
             "load": load,
             "procs": self.procs,
         }
