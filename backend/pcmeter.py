@@ -234,12 +234,57 @@ def pick_temp_source(coolant_temp, preference="auto"):
     return "coolant" if coolant_temp is not None and preference != "cpu" else "cpu"
 
 
+FANCTL_PATHS = ("/run/fanctl/state.json", "/run/host/run/fanctl/state.json")
+
+
+class FanctlCoolant:
+    """The coolant temperature from fanctl's state file (`inputs.coolant`): fanctl, a root service, already
+    polls the loop's own sensor, so this is the first source and costs one stat per sample, a parse only
+    when the file changed, and no subprocess. Stale (`t` older than STALE seconds), missing or malformed
+    means no value, and the caller falls back to the hwmon / liquidctl search."""
+    STALE = 30.0
+
+    def __init__(self, path="auto", paths=FANCTL_PATHS, wall=time.time):
+        self.paths = [] if path == "none" else ([path] if path != "auto" else list(paths))
+        self.wall = wall
+        self.cache = {}            # path -> (mtime_ns, size, t, coolant)
+
+    def present(self):
+        return any(os.path.exists(p) for p in self.paths)
+
+    def read(self):
+        for p in self.paths:
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            key = (st.st_mtime_ns, st.st_size)
+            hit = self.cache.get(p)
+            if not hit or hit[0] != key:
+                t = c = None
+                try:
+                    with open(p) as f:
+                        d = json.load(f)
+                    t = d.get("t")
+                    t = t if isinstance(t, (int, float)) and not isinstance(t, bool) else st.st_mtime
+                    c = (d.get("inputs") or {}).get("coolant")
+                    c = c if isinstance(c, (int, float)) and not isinstance(c, bool) else None
+                except Exception:
+                    pass
+                hit = self.cache[p] = (key, t, c)
+            _, t, c = hit
+            if c is not None and t is not None and 0 <= self.wall() - t <= self.STALE and _plausible(c):
+                return float(c)
+        return None
+
+
 class CoolantSensor:
     RESCAN = 60.0
 
     def __init__(self, preference="auto", liquidctl="auto", hwmon_root=HWMON_ROOT,
-                 system=None, clock=time.monotonic, start_thread=True):
+                 system=None, clock=time.monotonic, start_thread=True, fanctl="none", wall=time.time):
         self.preference = preference
+        self.fanctl = FanctlCoolant(fanctl, wall=wall) if fanctl != "none" else None
         self.hwmon_root = hwmon_root
         self.system = system or platform.system()
         self.clock = clock
@@ -249,7 +294,8 @@ class CoolantSensor:
         if self.system == "Linux":
             self._scan()
             path = None if liquidctl == "none" else (liquidctl if liquidctl != "auto" else shutil.which("liquidctl"))
-            if path and not self.file and (liquidctl != "auto" or os.path.exists(path)):
+            owned = self.fanctl is not None and self.fanctl.present()    # fanctl polls the loop: no second client
+            if path and not self.file and not owned and (liquidctl != "auto" or os.path.exists(path)):
                 self.poller = LiquidctlPoller(path, clock)
                 if start_thread:
                     self.poller.start()
@@ -263,6 +309,10 @@ class CoolantSensor:
         """(coolant temp C or None, source name or None); never blocks on the liquidctl process."""
         if self.system != "Linux":
             return self._read_psutil()
+        if self.fanctl is not None:
+            c = self.fanctl.read()
+            if c is not None:
+                return c, "fanctl"
         if not self.file and self.clock() >= self.next_scan:
             self._scan()
         if self.file:
@@ -806,9 +856,6 @@ class History:
         return {"interval": int(self.bucket), "samples": samples, "events": events, "raw": raw}
 
 
-FANCTL_PATHS = ("/run/fanctl/state.json", "/run/host/run/fanctl/state.json")
-
-
 class FanState:
     """Reads the state file written by fanctl (absent on most machines; errors are silent)."""
     EVERY = 2.0
@@ -1107,7 +1154,7 @@ def main():
     def start():
         """Start sampling and serving; returns (telemetry, server, url)."""
         telemetry = Telemetry(args.interval, args.amd_peak_bw,
-                              coolant=CoolantSensor(args.temp_source, args.liquidctl),
+                              coolant=CoolantSensor(args.temp_source, args.liquidctl, fanctl=args.fanctl_state),
                               fanctl=args.fanctl_state)
         try:
             server = ThreadingHTTPServer((args.host, args.port), make_handler(telemetry))
@@ -1127,7 +1174,7 @@ def main():
         # server). It starts paused and samples only while a gadget is visible and the session unlocked.
         def start_sampler():
             telemetry = Telemetry(args.interval, args.amd_peak_bw, proc_every=5.0,
-                                   coolant=CoolantSensor(args.temp_source, args.liquidctl),
+                                   coolant=CoolantSensor(args.temp_source, args.liquidctl, fanctl=args.fanctl_state),
                                    fanctl=args.fanctl_state)
             threading.Thread(target=telemetry.run, daemon=True).start()
             gpu_names = ", ".join(g.name for g in telemetry.gpus) or "none found"

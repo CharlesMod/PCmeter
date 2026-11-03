@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import ClassInfo, Property, QObject, QPoint, QSettings, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import ClassInfo, Property, QObject, QPoint, QRect, QSettings, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtDBus import QDBusConnection, QDBusMessage
 from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon, QSurfaceFormat, QWindow
 from PySide6.QtQml import QQmlComponent, QQmlEngine
@@ -43,6 +43,7 @@ SKINS = (("glass", "Glass"), ("matrix", "Matrix"), ("hive", "Hive"), ("windows",
          ("mac", "macOS"), ("linux", "Linux"), ("dark", "Dark"), ("white", "White"))
 VIEWS = (("full", "Full"), ("compact", "Compact"), ("gauge", "Gauges only"))
 DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH = 440, 340, 900
+MIN_ZOOM, MAX_ZOOM = 0.5, 3.0
 # The cards are drawn by Qt Quick. "gpu" (default) uses its hardware renderer (RHI: OpenGL or Vulkan): on
 # a real desktop it idles near 0.3% of a core. "cpu" (PCMETER_RENDER=cpu) is the software renderer, for
 # hosts with no usable GL (about 15% of a core when drawing a 4K card).
@@ -169,6 +170,7 @@ class Bridge(QObject):
     """What a card may ask of its window, and the settings it shows. Edges use Qt.Edge bits: left 1, right 2."""
     skinChanged, viewChanged, soundChanged = Signal(), Signal(), Signal()
     activeChanged, mutedChanged, volumeChanged, foldChanged = Signal(), Signal(), Signal(), Signal()
+    zoomChanged = Signal()
 
     def __init__(self, gadget):
         super().__init__(gadget)
@@ -182,6 +184,8 @@ class Bridge(QObject):
     skin = Property(str, lambda self: self.gadget.ctl.skin, notify=skinChanged)
     view = Property(str, lambda self: self.gadget.ctl.view, notify=viewChanged)
     sound = Property(bool, lambda self: self.gadget.ctl.sound, notify=soundChanged)
+    # the card is laid out at its natural size and scaled by `zoom` to fill its window
+    zoom = Property(float, lambda self: self.gadget.zoom, notify=zoomChanged)
     burstMs = Property(int, lambda self: BURST_MS, constant=True)   # how long the animators run after each sample
 
     # the processor card's Live / Temps tab and the Temps time range (seconds); PCMETER_TAB=temps starts on Temps
@@ -229,6 +233,7 @@ class Bridge(QObject):
     def startResize(self, edges):
         edges &= int(Qt.Edge.LeftEdge.value | Qt.Edge.RightEdge.value)
         if edges:
+            self.gadget.mark_user_sized()
             self.gadget.startSystemResize(Qt.Edges(edges))
 
     @Slot(int, int, float)
@@ -273,6 +278,16 @@ class Gadget(QObject):
         self.fixed_width = False
         self.wanted = False          # should be on screen once the card has its size
         self.sized = False
+        self.zoom = 1.0
+        self.last = None             # the card's last report (width, height, radius), in its own layout units
+        self.pending_size = False
+        stored = ctl.store.value(f"{key}/usersize")
+        saved_w = ctl.store.value(f"{key}/width")
+        # A size the keeper set by resizing is kept as saved. Older configs saved the width on every move,
+        # so a width other than the old default counts as chosen.
+        self.user = is_true(stored) if stored is not None else (saved_w is not None and int(saved_w) != DEFAULT_WIDTH)
+        if self.user:
+            self.zoom = max(MIN_ZOOM, min(MAX_ZOOM, float(ctl.store.value(f"{key}/zoom", 1.0))))
         self.bridge = Bridge(self)
         component = QQmlComponent(ctl.engine, QUrl.fromLocalFile(str(QML_DIR / "GadgetWindow.qml")))
         made = component.createWithInitialProperties({"cardKey": key, "host": self.bridge, "feed": ctl.feed})
@@ -288,11 +303,10 @@ class Gadget(QObject):
         win.setTitle(caption(label))
         win.setIcon(ctl.icon)
         self.width_saved = QTimer(self, singleShot=True, interval=500, timeout=self._save_geometry)
-        width = int(ctl.store.value(f"{key}/width", DEFAULT_WIDTH))
-        width = max(MIN_WIDTH, min(MAX_WIDTH, width))
-        win.setMinimumWidth(MIN_WIDTH)
-        win.setMaximumWidth(MAX_WIDTH)
-        win.resize(width, 620)
+        width = int(saved_w) if self.user and saved_w is not None else round(DEFAULT_WIDTH * self.zoom)
+        win.setMinimumWidth(round(MIN_WIDTH * self.zoom))
+        win.setMaximumWidth(round(MAX_WIDTH * self.zoom))
+        win.resize(max(round(MIN_WIDTH * self.zoom), min(round(MAX_WIDTH * self.zoom), width)), 620)
         self.reveal = QTimer(self, singleShot=True, interval=2500, timeout=self._reveal)
         win.visibleChanged.connect(lambda _: ctl.update_presence())
         win.visibilityChanged.connect(lambda _: ctl.update_presence())
@@ -300,6 +314,7 @@ class Gadget(QObject):
         win.heightChanged.connect(self._resized)
         win.xChanged.connect(self._moved)
         win.yChanged.connect(self._moved)
+        win.screenChanged.connect(lambda _: self.rederive())
 
     def __getattr__(self, name):             # only reached for what Gadget does not define
         if name == "win":
@@ -344,28 +359,68 @@ class Gadget(QObject):
             self.hide()
 
     # ---- size, shape and blur
+    def work_height(self):
+        """Height of the work area (the screen without panels) this card is on."""
+        screen = self.win.screen() or QGuiApplication.primaryScreen()
+        return self.ctl.work_area(screen).height()
+
     def content_size(self, width, height, radius):
+        """The card reports the size of its content in its own layout units: `width` 0 keeps the width the
+        keeper chose, otherwise the view needs exactly that width. Unless the keeper has resized the card,
+        its default height is half the screen's work area, so two stacked cards fill it, and the content is
+        scaled to fit (zoom), width following from height."""
+        self.last = (width, height, radius)
         self.radius = radius
         height = max(80, height)
-        if width > 0:                       # gauges view: exactly the dial's width
-            self.fixed_width = True
-            self.setMinimumWidth(width)
-            self.setMaximumWidth(width)
-            if self.width() != width:
-                self.resize(width, self.height())
-        elif self.fixed_width:              # back to the user's width
-            self.fixed_width = False
-            self.setMinimumWidth(MIN_WIDTH)
-            self.setMaximumWidth(MAX_WIDTH)
-            self.resize(int(self.ctl.store.value(f"{self.key}/width", DEFAULT_WIDTH)), self.height())
-        if height != self.height() or not self.sized:
-            self.setMinimumHeight(height)
-            self.setMaximumHeight(height)
-            self.resize(self.width(), height)
+        fixed = width > 0
+        self.fixed_width = fixed
+        if not self.user:
+            target = max(120, self.work_height() // len(CARDS))
+            zoom = max(MIN_ZOOM, min(MAX_ZOOM, target / height))
+            win_h = target
+        else:
+            zoom = self.zoom
+            win_h = round(height * zoom)
+        if abs(zoom - self.zoom) > 1e-4:
+            self.zoom = zoom
+            self.bridge.zoomChanged.emit()
+        if fixed:                           # gauges view: exactly the dial's width
+            win_w = round(width * zoom)
+            self.setMinimumWidth(win_w)
+            self.setMaximumWidth(win_w)
+        else:
+            self.setMinimumWidth(round(MIN_WIDTH * zoom))
+            self.setMaximumWidth(round(MAX_WIDTH * zoom))
+            if self.user:
+                win_w = int(self.ctl.store.value(f"{self.key}/width", self.width())) if self.fixed_was else self.width()
+            else:
+                win_w = round(DEFAULT_WIDTH * zoom)
+        self.fixed_was = fixed
+        if win_h != self.height() or not self.sized:
+            self.setMinimumHeight(win_h)
+            self.setMaximumHeight(win_h)
+        if (win_w, win_h) != (self.width(), self.height()):
+            self.resize(win_w, win_h)
+        if DEBUG:
+            print(f"[{self.key}] size layout={width}x{height} zoom={self.zoom:.3f} window={win_w}x{win_h} "
+                  f"work={self.work_height()} screen={(self.win.screen() or QGuiApplication.primaryScreen()).name()} user={self.user}", file=sys.stderr, flush=True)
         self.sized = True
         if self.wanted and not self.isVisible():
             self._reveal()
         self.update_blur()
+
+    fixed_was = False
+
+    def rederive(self):
+        """The card moved to another screen: its default size follows that screen (not if the keeper resized it)."""
+        if not self.user and self.last:
+            self.content_size(*self.last)
+
+    def mark_user_sized(self):
+        if not self.user:
+            self.user = True
+            self.ctl.store.setValue(f"{self.key}/usersize", True)
+            self.ctl.store.setValue(f"{self.key}/zoom", self.zoom)
 
     def _resized(self, *_):
         self.update_blur()
@@ -377,7 +432,7 @@ class Gadget(QObject):
             self.width_saved.start()
 
     def _save_geometry(self):
-        if not self.fixed_width:
+        if self.user and not self.fixed_width:
             self.ctl.store.setValue(f"{self.key}/width", self.width())
         if not self.ctl.wayland and self.isVisible():
             self.ctl.store.setValue(f"{self.key}/pos", [self.x(), self.y()])
@@ -385,7 +440,7 @@ class Gadget(QObject):
     def update_blur(self):
         if not self.isVisible():
             return
-        rects = rounded_rects(self.width(), self.height(), self.radius)
+        rects = rounded_rects(self.width(), self.height(), self.radius * self.zoom)
         if self.ctl.wayland:
             wlblur.set_blur(self.win, rects)
         elif QGuiApplication.platformName() == "xcb":
@@ -412,6 +467,10 @@ class Service(QObject):
     @Slot()
     def show(self):
         self.ctl.show_all()
+
+    @Slot(str, int, int, int, int)
+    def workArea(self, name, x, y, w, h):
+        self.ctl.set_work_area(name, QRect(x, y, w, h))
 
     @Slot(str, int, int)
     def moved(self, window_caption, x, y):
@@ -443,6 +502,7 @@ class Controller(QObject):
         if bus.isConnected():
             bus.registerObject(OBJECT_PATH, self.service, QDBusConnection.RegisterOption.ExportAllSlots)
 
+        self.areas = {}              # Wayland: screen name -> work area, reported by the KWin script
         self.placer = None
         if self.wayland and bus.isConnected() and kwin.present():
             self.placer = kwin.Placer(APP_ID, SERVICE, OBJECT_PATH, IFACE)
@@ -610,10 +670,23 @@ class Controller(QObject):
             if caption(label) == window_caption:
                 self.store.setValue(f"{key}/wlpos", [x, y])
 
+    def work_area(self, screen):
+        """The screen minus panels. Qt knows it on X11; on Wayland KWin's script reports it."""
+        return self.areas.get(screen.name()) or screen.availableGeometry()
+
+    def set_work_area(self, name, rect):
+        if DEBUG:
+            print(f"work area {name}: {rect.x()},{rect.y()} {rect.width()}x{rect.height()}", file=sys.stderr, flush=True)
+        if self.areas.get(name) != rect:
+            self.areas[name] = rect
+            for g in getattr(self, "gadgets", {}).values():
+                g.rederive()
+
     def default_position(self, gadget):
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        i = [k for k, _ in reversed(CARDS)].index(gadget.key)
-        return QPoint(screen.right() - 24 - (i + 1) * gadget.width() - i * 16, screen.top() + 24)
+        """X11: the cards stack flush in one column at the right edge of the work area, CPU on top."""
+        screen = self.work_area(gadget.win.screen() or QGuiApplication.primaryScreen())
+        i = [k for k, _ in CARDS].index(gadget.key)
+        return QPoint(screen.right() + 1 - gadget.width(), screen.top() + i * (screen.height() // len(CARDS)))
 
     # ---- cards
     def set_card(self, key, on):

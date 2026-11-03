@@ -11,7 +11,9 @@ Window {
     color: "transparent"
     onClosing: function (close) { close.accepted = host.closeRequested() }
     Card {
-        anchors.fill: parent
+        // laid out at its natural size, scaled by host.zoom to fill the window
+        width: win.width / host.zoom; height: win.height / host.zoom
+        scale: host.zoom; transformOrigin: Item.TopLeft
         cardKey: win.cardKey; host: win.host; feed: win.feed
     }
 }

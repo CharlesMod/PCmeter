@@ -274,19 +274,28 @@ Item {
         Item {
             id: stage
             width: parent.width; height: inst.height
-            Flow {
+            // The dial sits in the middle of its free area: beside the readouts it is centred on their height,
+            // above them (narrow) or alone (gauges) it is centred across the card.
+            Item {
                 id: inst
+                readonly property int spacing: 14
+                readonly property bool wide: !root.narrow && !root.gauge
                 visible: root.present && !root.temps
-                width: parent.width; spacing: 14
+                width: parent.width
+                height: root.gauge ? dial.height : (wide ? Math.max(dial.height, readouts.height) : dial.height + spacing + readouts.height)
                 Dial {
                     id: dial
                     sk: root.sk; acc: root.acc; zones: root.zones; tempC: root.tempC
                     tmin: root.tmin; tmax: root.tmax; tag: root.isCpu && root.liq ? "LIQ" : ""
-                    x: root.narrow || root.gauge ? (parent.width - width) / 2 : 0
+                    x: inst.wide ? 0 : (inst.width - width) / 2
+                    y: inst.wide ? (inst.height - height) / 2 : 0
                 }
                 Column {
+                    id: readouts
                     visible: !root.gauge
-                    width: root.narrow ? parent.width : parent.width - dial.width - inst.spacing
+                    x: inst.wide ? dial.width + inst.spacing : 0
+                    y: inst.wide ? (inst.height - height) / 2 : dial.height + inst.spacing
+                    width: inst.wide ? parent.width - dial.width - inst.spacing : parent.width
                     spacing: 0
                     ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Clock" : "Core clock"; value: root.rows.a ? root.rows.a[0] : "—"; unit: root.rows.a ? root.rows.a[1] : "" }
                     ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Package power" : "Board power"; value: root.rows.b ? root.rows.b[0] : "—"; unit: root.rows.b ? root.rows.b[1] : "" }

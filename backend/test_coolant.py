@@ -127,3 +127,68 @@ class Selection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FanctlState(unittest.TestCase):
+    """fanctl's state file is the first coolant source."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = str(Path(self.tmp.name) / "state.json")
+        self.now = 1000.0
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, text):
+        Path(self.state).write_text(text)
+
+    def sensor(self, hwmon=None):
+        return pm.CoolantSensor(hwmon_root=hwmon or self.tmp.name + "/none", system="Linux", liquidctl="none",
+                                fanctl=self.state, wall=lambda: self.now)
+
+    def test_fresh(self):
+        self.write('{"t": 990.0, "inputs": {"cpu": 80, "coolant": 55.53}}')
+        self.assertEqual(self.sensor().read(), (55.53, "fanctl"))
+        self.assertEqual(self.sensor().fields()["temp_source"], "coolant")
+
+    def test_stale_falls_back_to_hwmon(self):
+        self.write('{"t": 900.0, "inputs": {"coolant": 55.5}}')
+        root = self.tmp.name + "/hw"
+        chip(root, 0, "x53", {1: (None, 29000)})
+        self.assertEqual(self.sensor(root).read(), (29.0, "x53"))
+
+    def test_stale_without_fallback(self):
+        self.write('{"t": 900.0, "inputs": {"coolant": 55.5}}')
+        self.assertEqual(self.sensor().read(), (None, None))
+
+    def test_missing_key(self):
+        self.write('{"t": 995.0, "inputs": {"cpu": 80}}')
+        self.assertEqual(self.sensor().read(), (None, None))
+
+    def test_malformed(self):
+        for text in ("{not json", "[]", '{"t": 995.0, "inputs": {"coolant": "hot"}}', '{"t": 995.0, "inputs": 5}', ""):
+            self.write(text)
+            self.assertEqual(self.sensor().read(), (None, None), text)
+
+    def test_implausible(self):
+        self.write('{"t": 995.0, "inputs": {"coolant": 3.0}}')
+        self.assertEqual(self.sensor().read(), (None, None))
+
+    def test_missing_file(self):
+        self.assertEqual(self.sensor().read(), (None, None))
+
+    def test_follows_updates_and_age(self):
+        self.write('{"t": 995.0, "inputs": {"coolant": 40.5}}')
+        s = self.sensor()
+        self.assertEqual(s.read(), (40.5, "fanctl"))
+        self.write('{"t": 996.0, "inputs": {"coolant": 41.25}}')
+        self.assertEqual(s.read(), (41.25, "fanctl"))
+        self.now = 1040.0                       # 44 s old now
+        self.assertEqual(s.read(), (None, None))
+
+    def test_no_second_liquidctl_client(self):
+        self.write('{"t": 995.0, "inputs": {"coolant": 40.5}}')
+        s = pm.CoolantSensor(hwmon_root=self.tmp.name + "/none", system="Linux", liquidctl="/bin/true",
+                             fanctl=self.state, start_thread=False)
+        self.assertIsNone(s.poller)

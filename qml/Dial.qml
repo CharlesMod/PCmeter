@@ -23,12 +23,16 @@ Item {
     readonly property real a0: 0.75 * Math.PI
     readonly property real sweep: 1.5 * Math.PI
     readonly property real cx: width / 2
-    readonly property real cy: height * 0.455
-    readonly property real rad: Math.min(width / 2 - 6, cy - 4)
+    readonly property real cy0: height * 0.455
+    readonly property real rad: Math.min(width / 2 - 6, cy0 - 4)
     readonly property real ra: rad - 30
+    readonly property real sr: rad * .34
+    // the face plus the inset temperature dial below it, centred as one piece in the item's height
+    readonly property real inkTop: cy0 - rad
+    readonly property real inkBottom: Math.max(cy0 + rad, cy0 + rad * .73 + sr)
+    readonly property real cy: cy0 + (height - inkTop - inkBottom) / 2
     readonly property real sx: cx
     readonly property real sy: cy + rad * .73
-    readonly property real sr: rad * .34
     readonly property int pct: Math.round(F.clamp(loadV) * 100)
     readonly property color accent: Skins.qt(acc)
     function ang(v) { return a0 + sweep * F.clamp(v) }

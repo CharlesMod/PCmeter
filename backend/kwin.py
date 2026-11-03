@@ -2,7 +2,7 @@
 
 A Wayland app cannot place its own windows or learn where they are, so PCmeter loads a KWin
 script for the life of the process. It puts each gadget where it was last left (or at the
-top-right of the active screen the first time), keeps the gadgets off the taskbar, the task
+top-right of the active screen the first time (stacked flush, half the work area high)), keeps the gadgets off the taskbar, the task
 switcher and the pager, applies "keep on top", and reports every finished move back over D-Bus
 so the position can be saved. The script is transient: it is unloaded on quit, and a stale copy
 from a crash is replaced on the next start.
@@ -23,15 +23,31 @@ const order = %(order)s;   // captions, right to left, for first-time placement
 
 function mine(w) { return w && w.resourceClass == %(app)s && order.indexOf(w.caption) >= 0; }
 
+function areaOf(w) {
+  const out = w.output || workspace.activeScreen;
+  return workspace.clientArea(KWin.PlacementArea, out, workspace.currentDesktop);
+}
+
+// First-time placement: the cards stack flush in one column at the right edge of the work area
+// (the screen minus panels), the first caption on top. Each is half the area high, so two fill it.
 function place(w) {
   const g = w.frameGeometry;
   let p = saved[w.caption];
   if (!p) {
-    const area = workspace.clientArea(KWin.PlacementArea, workspace.activeScreen, workspace.currentDesktop);
-    const i = order.indexOf(w.caption);
-    p = [area.x + area.width - 24 - (i + 1) * g.width - i * 16, area.y + 24];
+    const area = areaOf(w);
+    const j = order.length - 1 - order.indexOf(w.caption);
+    p = [area.x + area.width - g.width, area.y + j * Math.floor(area.height / order.length)];
   }
+  if (Math.round(g.x) == Math.round(p[0]) && Math.round(g.y) == Math.round(p[1])) return;
   w.frameGeometry = { x: p[0], y: p[1], width: g.width, height: g.height };
+}
+
+// Tell PCmeter each screen's work area, so a card's default height can be half of it.
+function report() {
+  (workspace.screens || []).forEach(function (o) {
+    const a = workspace.clientArea(KWin.PlacementArea, o, workspace.currentDesktop);
+    callDBus(SERVICE, PATH, IFACE, "workArea", o.name, Math.round(a.x), Math.round(a.y), Math.round(a.width), Math.round(a.height));
+  });
 }
 
 function setup(w) {
@@ -42,6 +58,8 @@ function setup(w) {
   w.onAllDesktops = true;
   w.keepAbove = ABOVE;
   place(w);
+  // until the user moves it, keep the default stack in place while the card settles to its size
+  w.frameGeometryChanged.connect(function () { if (!saved[w.caption] && !w.move && !w.resize) place(w); });
   w.interactiveMoveResizeFinished.connect(function () {
     const g = w.frameGeometry;
     saved[w.caption] = [Math.round(g.x), Math.round(g.y)];
@@ -49,6 +67,9 @@ function setup(w) {
   });
 }
 
+report();
+try { workspace.screensChanged.connect(report); } catch (e) {}
+try { workspace.currentDesktopChanged.connect(report); } catch (e) {}
 workspace.windowList().forEach(setup);
 workspace.windowAdded.connect(setup);
 """
