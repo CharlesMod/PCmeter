@@ -1,10 +1,14 @@
 """PCmeter desktop gadgets: the CPU and GPU cards as separate frameless, translucent windows.
 
-There is no outer window. Each card is its own window, exactly the size of the card, and the
-desktop shows through it. Drag a card anywhere to move it, drag its left or right edge to change
-its width (the height follows the content), and use its buttons to dismiss it or open the menu.
-The menu (also in the system tray) picks the skin, the view (full, compact, gauges), clicks, keep-on-top, and which
-cards are shown.
+There is no outer window. Each card is its own Qt Quick window (qml/Card.qml), exactly the size of
+the card, and the desktop shows through it. Drag a card anywhere to move it, drag its left or right
+edge to change its width (the height follows the content), and use its buttons to dismiss it or open
+the menu. The menu (also in the system tray) picks the skin, the view (full, compact, gauges), clicks,
+keep-on-top, and which cards are shown.
+
+The cards cost nothing while nothing moves: the scene graph renders only when an animation runs, and
+sampling stops entirely (the sampler waits on an event) while every card is hidden or minimised or
+the session is locked. The telemetry reaches the windows in-process, with no server.
 
 Wayland (KDE Plasma): windows stay native so they are sharp at fractional scales. KWin does
 the placing (see kwin.py) and the blur behind each card (see wlblur.py).
@@ -13,19 +17,17 @@ X11: the windows place themselves and ask KWin for blur with _KDE_NET_WM_BLUR_BE
 One copy runs per user: launching again re-shows any dismissed card (D-Bus org.pcmeter.PCmeter).
 """
 import ctypes
-import json
 import math
 import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import ClassInfo, QFile, QIODevice, QObject, QPoint, QSettings, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import ClassInfo, Property, QEvent, QObject, QPoint, QSettings, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtDBus import QDBusConnection, QDBusMessage
-from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QGuiApplication, QIcon
-from PySide6.QtWebChannel import QWebChannel
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
+from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon, QSurfaceFormat, QWindow
+from PySide6.QtQml import QQmlEngine
+from PySide6.QtQuick import QQuickView
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import kwin
 import wlblur
@@ -37,18 +39,11 @@ SKINS = (("glass", "Glass"), ("matrix", "Matrix"), ("hive", "Hive"), ("windows",
          ("mac", "macOS"), ("linux", "Linux"), ("dark", "Dark"), ("white", "White"))
 VIEWS = (("full", "Full"), ("compact", "Compact"), ("gauge", "Gauges only"))
 DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH = 440, 340, 900
-DEBUG = bool(os.environ.get("PCMETER_DEBUG"))
-RENDER = os.environ.get("PCMETER_RENDER", "cpu")           # "gpu" to let Chromium use the GPU
-PAGE_ARGS = os.environ.get("PCMETER_PAGE_ARGS", "")       # extra query for the gadget pages (testing)
-
-BRIDGE_JS = """
-(() => {
-  %(qwebchannel)s
-  let resolve;
-  window.pcmeterHost = new Promise(r => { resolve = r; });
-  new QWebChannel(qt.webChannelTransport, ch => resolve(ch.objects.host));
-})();
-"""
+# The cards are drawn by Qt Quick. "cpu" (default) uses its software renderer: a monitor should not
+# wake the GPU it is watching (an NVIDIA context shows up in nvidia-smi and holds the card out of its
+# idle clocks). "gpu" uses Qt's default hardware renderer (RHI: OpenGL or Vulkan).
+RENDER = os.environ.get("PCMETER_RENDER", "cpu")
+QML_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "qml"
 
 
 def caption(label):
@@ -77,30 +72,84 @@ def rounded_rects(w, h, r):
     return rects
 
 
+def is_true(v):
+    return v in ("true", True)
+
+
+class Feed(QObject):
+    """The latest telemetry snapshot, as a property the cards bind to. `push` is called on the sampler thread."""
+    snapshotChanged = Signal()
+    _arrive = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._snap = {}
+        self._arrive.connect(self._store)          # queued: delivered on the Qt thread
+
+    def push(self, snap):
+        self._arrive.emit(snap)
+
+    @Slot(object)
+    def _store(self, snap):
+        self._snap = snap
+        self.snapshotChanged.emit()
+
+    snapshot = Property("QVariant", lambda self: self._snap, notify=snapshotChanged)
+
+
 class Bridge(QObject):
-    """What a gadget page may ask of its window. Edges use Qt.Edge bits: left 1, right 2."""
-    settingsChanged = Signal(str)
+    """What a card may ask of its window, and the settings it shows. Edges use Qt.Edge bits: left 1, right 2."""
+    skinChanged, viewChanged, soundChanged = Signal(), Signal(), Signal()
+    activeChanged, mutedChanged, volumeChanged, foldChanged = Signal(), Signal(), Signal(), Signal()
 
     def __init__(self, gadget):
         super().__init__(gadget)
         self.gadget = gadget
+        self._active = False
 
-    @Slot(result=str)
-    def settings(self):
-        return self.gadget.ctl.settings_json()
+    def _store_key(self, name):
+        return f"{self.gadget.key}/{name}"
+
+    # settings shared by both cards
+    skin = Property(str, lambda self: self.gadget.ctl.skin, notify=skinChanged)
+    view = Property(str, lambda self: self.gadget.ctl.view, notify=viewChanged)
+    sound = Property(bool, lambda self: self.gadget.ctl.sound, notify=soundChanged)
+
+    # on screen and awake: false while the card is hidden or minimised and while the session is locked
+    active = Property(bool, lambda self: self._active, notify=activeChanged)
+
+    def set_active(self, on):
+        if on != self._active:
+            self._active = on
+            self.activeChanged.emit()
+
+    # this card's own: clicks muted (cards start muted), click volume 0..1, process list folded out
+    def _muted(self):
+        return is_true(self.gadget.ctl.store.value(self._store_key("muted"), "true"))
+
+    def _volume(self):
+        return float(self.gadget.ctl.store.value(self._store_key("volume"), 0.6))
+
+    def _fold(self):
+        return is_true(self.gadget.ctl.store.value(self._store_key("fold"), "false"))
+
+    def _set(self, name, value, signal):
+        self.gadget.ctl.store.setValue(self._store_key(name), value)
+        signal.emit()
+
+    muted = Property(bool, _muted, lambda self, v: self._set("muted", v, self.mutedChanged), notify=mutedChanged)
+    volume = Property(float, _volume, lambda self, v: self._set("volume", v, self.volumeChanged), notify=volumeChanged)
+    fold = Property(bool, _fold, lambda self, v: self._set("fold", v, self.foldChanged), notify=foldChanged)
 
     @Slot()
     def startMove(self):
-        handle = self.gadget.windowHandle()
-        if handle:
-            handle.startSystemMove()
+        self.gadget.startSystemMove()
 
     @Slot(int)
     def startResize(self, edges):
-        handle = self.gadget.windowHandle()
         edges &= int(Qt.Edge.LeftEdge.value | Qt.Edge.RightEdge.value)
-        if handle and edges:
-            handle.startSystemResize(Qt.Edges(edges))
+        if edges:
+            self.gadget.startSystemResize(Qt.Edges(edges))
 
     @Slot(int, int, float)
     def setSize(self, width, height, radius):
@@ -120,22 +169,21 @@ class Bridge(QObject):
         self.gadget.ctl.set_card(self.gadget.key, False)
 
 
-class Page(QWebEnginePage):
-    def javaScriptConsoleMessage(self, level, message, line, source):
-        if DEBUG:
-            print(f"[{self.objectName()}] {message}", flush=True)
-
-
-class Gadget(QWidget):
-    def __init__(self, ctl, key, label, url, profile):
-        super().__init__(None, Gadget.flags_for(ctl))
+class Gadget(QQuickView):
+    def __init__(self, ctl, key, label):
+        super().__init__(ctl.engine, None)
         self.ctl, self.key, self.label = ctl, key, label
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setWindowTitle(caption(label))
-        self.setWindowIcon(ctl.icon)
+        self.setFlags(Gadget.flags_for(ctl))
+        fmt = QSurfaceFormat()
+        fmt.setAlphaBufferSize(8)
+        self.setFormat(fmt)
+        self.setColor(QColor(0, 0, 0, 0))
+        self.setTitle(caption(label))
+        self.setIcon(ctl.icon)
+        self.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
         self.radius = 0.0
         self.fixed_width = False
-        self.wanted = False          # should be on screen once the page has its size
+        self.wanted = False          # should be on screen once the card has its size
         self.sized = False
         self.width_saved = QTimer(self, singleShot=True, interval=500, timeout=self._save_geometry)
 
@@ -145,30 +193,14 @@ class Gadget(QWidget):
         self.setMaximumWidth(MAX_WIDTH)
         self.resize(width, 620)
 
-        self.view = QWebEngineView(self)
-        self.view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.view.setStyleSheet("background: transparent")
-        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.view.setGeometry(0, 0, width, 620)
-        page = Page(profile, self.view)
-        page.setObjectName(key)
-        page.setBackgroundColor(QColor(0, 0, 0, 0))
-        self.view.setPage(page)
-
         self.bridge = Bridge(self)
-        self.channel = QWebChannel(page)
-        self.channel.registerObject("host", self.bridge)
-        page.setWebChannel(self.channel)
-        script = QWebEngineScript()
-        script.setName("pcmeter-bridge")
-        script.setSourceCode(BRIDGE_JS % {"qwebchannel": ctl.qwebchannel_js})
-        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
-        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
-        page.scripts().insert(script)
-
-        query = f"gadget={key}" + ("&lite" if RENDER == "cpu" else "") + ("&fps" if DEBUG else "") + (f"&{PAGE_ARGS}" if PAGE_ARGS else "")
-        self.view.load(QUrl(f"{url}?{query}"))
+        self.setInitialProperties({"cardKey": key, "host": self.bridge, "feed": ctl.feed})
+        self.setSource(QUrl.fromLocalFile(str(QML_DIR / "Card.qml")))
+        for error in self.errors():
+            print(f"[{key}] {error.toString()}", file=sys.stderr, flush=True)
         self.reveal = QTimer(self, singleShot=True, interval=2500, timeout=self._reveal)
+        self.visibleChanged.connect(lambda _: ctl.update_presence())
+        self.visibilityChanged.connect(lambda _: ctl.update_presence())
 
     @staticmethod
     def flags_for(ctl):
@@ -185,7 +217,7 @@ class Gadget(QWidget):
         if self.sized:
             self._reveal()
         else:
-            self.reveal.start()              # never wait forever for the page to report its size
+            self.reveal.start()              # never wait forever for the card to report its size
 
     def _reveal(self):
         if not self.wanted or self.isVisible():
@@ -194,7 +226,7 @@ class Gadget(QWidget):
             pos = self.ctl.store.value(f"{self.key}/pos")
             if pos is None:
                 pos = self.ctl.default_position(self)
-            self.move(QPoint(int(pos[0]), int(pos[1])) if isinstance(pos, (list, tuple)) else pos)
+            self.setPosition(QPoint(int(pos[0]), int(pos[1])) if isinstance(pos, (list, tuple)) else pos)
         self.show()
         QTimer.singleShot(0, self.update_blur)
         QTimer.singleShot(250, self.update_blur)
@@ -203,16 +235,16 @@ class Gadget(QWidget):
         self.wanted = False
         if self.isVisible():
             self._save_geometry()
-            if self.ctl.wayland and self.windowHandle():
-                wlblur.clear_blur(self.windowHandle())
+            if self.ctl.wayland:
+                wlblur.clear_blur(self)
             self.hide()
 
-    def closeEvent(self, event):         # Alt+F4 and the like dismiss the card
-        if not self.ctl.quitting:
-            event.ignore()
+    def event(self, e):                      # Alt+F4 and the like dismiss the card
+        if e.type() == QEvent.Type.Close and not self.ctl.quitting:
+            e.ignore()
             self.ctl.set_card(self.key, False)
-            return
-        super().closeEvent(event)
+            return True
+        return super().event(e)
 
     # ---- size, shape and blur
     def content_size(self, width, height, radius):
@@ -220,30 +252,34 @@ class Gadget(QWidget):
         height = max(80, height)
         if width > 0:                       # gauges view: exactly the dial's width
             self.fixed_width = True
-            self.setFixedWidth(width)
+            self.setMinimumWidth(width)
+            self.setMaximumWidth(width)
+            if self.width() != width:
+                self.resize(width, self.height())
         elif self.fixed_width:              # back to the user's width
             self.fixed_width = False
             self.setMinimumWidth(MIN_WIDTH)
             self.setMaximumWidth(MAX_WIDTH)
             self.resize(int(self.ctl.store.value(f"{self.key}/width", DEFAULT_WIDTH)), self.height())
         if height != self.height() or not self.sized:
-            self.setFixedHeight(height)
+            self.setMinimumHeight(height)
+            self.setMaximumHeight(height)
+            self.resize(self.width(), height)
         self.sized = True
         if self.wanted and not self.isVisible():
             self._reveal()
         self.update_blur()
 
     def resizeEvent(self, event):
-        self.view.setGeometry(self.rect())
+        super().resizeEvent(event)
         self.update_blur()
         if self.isVisible():
             self.width_saved.start()
-        super().resizeEvent(event)
 
     def moveEvent(self, event):
+        super().moveEvent(event)
         if self.isVisible() and not self.ctl.wayland:
             self.width_saved.start()
-        super().moveEvent(event)
 
     def _save_geometry(self):
         if not self.fixed_width:
@@ -252,19 +288,19 @@ class Gadget(QWidget):
             self.ctl.store.setValue(f"{self.key}/pos", [self.x(), self.y()])
 
     def update_blur(self):
-        if not self.isVisible() or not self.windowHandle():
+        if not self.isVisible():
             return
         rects = rounded_rects(self.width(), self.height(), self.radius)
         if self.ctl.wayland:
-            wlblur.set_blur(self.windowHandle(), rects)
-        else:
+            wlblur.set_blur(self, rects)
+        elif QGuiApplication.platformName() == "xcb":
             _blur_behind_x11(self, rects)
 
     def set_above(self, above):
         if self.ctl.wayland:
             return                         # KWin's script applies it
         visible = self.isVisible()
-        self.setWindowFlags(Gadget.flags_for(self.ctl))
+        self.setFlags(Gadget.flags_for(self.ctl))
         if visible:
             self.show()
             QTimer.singleShot(0, self.update_blur)
@@ -288,9 +324,15 @@ class Service(QObject):
 
 
 class Controller(QObject):
-    def __init__(self, app, url, bus):
+    def __init__(self, app, telemetry, bus):
         super().__init__(app)
-        self.app, self.url, self.bus = app, url, bus
+        self.app, self.telemetry, self.bus = app, telemetry, bus
+        self.feed = Feed(self)
+        telemetry.listeners.append(self.feed.push)
+        self.engine = QQmlEngine(self)
+        self.engine.quit.connect(self.quit)
+        self.screensaver = self.logind = False     # the session is locked when either says so
+        self.present = None
         self.wayland = QGuiApplication.platformName() == "wayland"
         self.store = QSettings(APP_ID, APP_ID)
         self.quitting = False
@@ -300,15 +342,6 @@ class Controller(QObject):
         self.sound = self.store.value("sound", "true") in ("true", True)   # the master; cards start muted
         self.above = self.store.value("above", "false") in ("true", True)
         self.icon = _icon()
-        self.qwebchannel_js = _qwebchannel_js()
-
-        data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "pcmeter"
-        self.profile = QWebEngineProfile("pcmeter", self)
-        self.profile.setPersistentStoragePath(str(data / "web"))
-        self.profile.setCachePath(str(data / "web-cache"))
-        self.profile.settings().setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
-        self.profile.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
-        self.profile.settings().setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, False)
 
         self.service = Service(self)
         if bus.isConnected():
@@ -329,25 +362,98 @@ class Controller(QObject):
             self.tray.activated.connect(self._tray_clicked)
             self.tray.show()
 
-        self.gadgets = {key: Gadget(self, key, label, url, self.profile) for key, label in CARDS}
+        self.gadgets = {key: Gadget(self, key, label) for key, label in CARDS}
+        self._watch_lock()
         shown = [key for key, _ in CARDS if self.store.value(f"{key}/shown", "true") in ("true", True)]
         for key in shown or [key for key, _ in CARDS]:      # all dismissed last time: show them all
             self.set_card(key, True)
         app.aboutToQuit.connect(self._shutdown)
 
     # ---- settings
-    def settings_json(self):
-        return json.dumps({"skin": self.skin, "view": self.view, "sound": self.sound})
-
-    def _push(self):
-        payload = self.settings_json()
-        for g in self.gadgets.values():
-            g.bridge.settingsChanged.emit(payload)
-
     def _set(self, name, value):
         setattr(self, name, value)
         self.store.setValue(name, value)
-        self._push()
+        for g in self.gadgets.values():
+            getattr(g.bridge, f"{name}Changed").emit()
+        if name == "view":
+            self.update_wants()
+
+    # ---- presence: sample and animate only while a card can be seen
+    def update_wants(self):
+        """Ask the sampler for just what the visible cards show: the process list in the full view, the
+        readouts beside the dial in the full and compact views, the dial alone in gauges."""
+        wants = {"procs": self.view == "full", "full": self.view != "gauge"}
+        self.telemetry.want = {k: (dict(wants) if g.wanted else None) for k, g in self.gadgets.items()}
+
+    def update_presence(self):
+        """Evented: called when a card shows, hides or minimises and when the lock state changes."""
+        if not hasattr(self, "gadgets") or self.quitting:
+            return
+        locked = self.screensaver or self.logind
+        seen = {k: (not locked and g.isVisible() and g.visibility() != QWindow.Visibility.Minimized)
+                for k, g in self.gadgets.items()}
+        for k, g in self.gadgets.items():
+            g.bridge.set_active(seen[k])
+        present = any(seen.values())
+        if present != self.present:
+            self.present = present
+            self.telemetry.set_local(present)
+
+    def _watch_lock(self):
+        """Session lock, from KDE's screen locker (ScreenSaver.ActiveChanged) and from logind (LockedHint
+        and the Lock/Unlock signals). Both are D-Bus signals: nothing polls."""
+        if self.bus.isConnected():
+            for path in ("/ScreenSaver", "/org/freedesktop/ScreenSaver"):
+                self.bus.connect("org.freedesktop.ScreenSaver", path, "org.freedesktop.ScreenSaver",
+                                 "ActiveChanged", self, "1screensaverChanged(bool)")
+            reply = self.bus.call(QDBusMessage.createMethodCall(
+                "org.freedesktop.ScreenSaver", "/ScreenSaver", "org.freedesktop.ScreenSaver", "GetActive"), timeout=500)
+            if reply.type() == QDBusMessage.MessageType.ReplyMessage and reply.arguments():
+                self.screensaver = bool(reply.arguments()[0])
+        system = QDBusConnection.systemBus()
+        if not system.isConnected():
+            return
+        manager = ("org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager")
+        sid = os.environ.get("XDG_SESSION_ID")
+        msg = QDBusMessage.createMethodCall(*manager, "GetSession" if sid else "GetSessionByPID")
+        msg.setArguments([sid] if sid else [os.getpid()])
+        reply = system.call(msg, timeout=500)
+        if reply.type() != QDBusMessage.MessageType.ReplyMessage or not reply.arguments():
+            return
+        self.session_path = str(reply.arguments()[0].path()) if hasattr(reply.arguments()[0], "path") else str(reply.arguments()[0])
+        system.connect("org.freedesktop.login1", self.session_path, "org.freedesktop.DBus.Properties",
+                       "PropertiesChanged", self, "1logindChanged()")
+        system.connect("org.freedesktop.login1", self.session_path, "org.freedesktop.login1.Session",
+                       "Lock", self, "1logindLock()")
+        system.connect("org.freedesktop.login1", self.session_path, "org.freedesktop.login1.Session",
+                       "Unlock", self, "1logindUnlock()")
+        self.logindChanged()
+
+    @Slot(bool)
+    def screensaverChanged(self, active):
+        self.screensaver = bool(active)
+        self.update_presence()
+
+    @Slot()
+    def logindLock(self):
+        self.logind = True
+        self.update_presence()
+
+    @Slot()
+    def logindUnlock(self):
+        self.logind = False
+        self.update_presence()
+
+    @Slot()
+    def logindChanged(self):
+        msg = QDBusMessage.createMethodCall("org.freedesktop.login1", self.session_path,
+                                            "org.freedesktop.DBus.Properties", "Get")
+        msg.setArguments(["org.freedesktop.login1.Session", "LockedHint"])
+        reply = QDBusConnection.systemBus().call(msg, timeout=500)
+        if reply.type() == QDBusMessage.MessageType.ReplyMessage and reply.arguments():
+            value = reply.arguments()[0]
+            self.logind = bool(value.value() if hasattr(value, "value") else value)
+            self.update_presence()
 
     def _load_placer(self):
         saved = {}
@@ -375,11 +481,14 @@ class Controller(QObject):
         self.card_actions[key].setChecked(on)
         if on:
             g.open()
+            self.update_wants()
             if g.isVisible():
                 g.raise_()
-                g.activateWindow()
+                g.requestActivate()
         else:
             g.dismiss()
+            self.update_wants()
+            self.update_presence()
             if self.tray is None and not any(x.wanted for x in self.gadgets.values()):
                 self.quit()
 
@@ -435,7 +544,7 @@ class Controller(QObject):
         return menu
 
     def popup_menu(self, gadget, point):
-        menu = self._menu(gadget)
+        menu = self._menu(None)
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(gadget.mapToGlobal(point))
 
@@ -458,22 +567,13 @@ class Controller(QObject):
 
     def _shutdown(self):
         self.quitting = True
+        self.telemetry.set_local(False)
         for g in self.gadgets.values():
             if g.isVisible():
                 g._save_geometry()
         if self.placer:
             self.placer.unload()
         self.store.sync()
-
-
-def _qwebchannel_js():
-    f = QFile(":/qtwebchannel/qwebchannel.js")
-    if not f.open(QIODevice.OpenModeFlag.ReadOnly):
-        raise RuntimeError("qwebchannel.js is missing from this Qt build")
-    try:
-        return bytes(f.readAll().data()).decode()
-    finally:
-        f.close()
 
 
 def _blur_behind_x11(window, rects):
@@ -492,7 +592,7 @@ def _blur_behind_x11(window, rects):
     if not display:
         return
     try:
-        dpr = window.devicePixelRatioF()
+        dpr = window.devicePixelRatio()
         flat = [int(round(v * dpr)) for rect in rects for v in rect]
         data = (ctypes.c_long * max(1, len(flat)))(*flat)
         atom = x11.XInternAtom(display, b"_KDE_NET_WM_BLUR_BEHIND_REGION", 0)
@@ -510,48 +610,35 @@ def _icon():
     return QIcon.fromTheme("utilities-system-monitor")
 
 
-def _gpu_info(app):
-    """PCMETER_GPU_INFO=1: print what Chromium's GPU stack reports (chrome://gpu) and exit."""
-    view = QWebEngineView()
-    view.resize(900, 700)
-
-    def done(ok):
-        QTimer.singleShot(1500, lambda: view.page().toPlainText(lambda text: (print(text, flush=True), app.quit())))
-
-    view.loadFinished.connect(done)
-    view.load(QUrl("chrome://gpu"))
-    view.show()
-    return app.exec()
+def _icon():
+    for base in (getattr(sys, "_MEIPASS", None), Path(__file__).resolve().parent.parent / "packaging"):
+        if base and (Path(base) / "pcmeter.svg").exists():
+            return QIcon(str(Path(base) / "pcmeter.svg"))
+    return QIcon.fromTheme("utilities-system-monitor")
 
 
-def run(start_server):
-    """Show the gadgets and block until PCmeter quits. `start_server()` starts telemetry and returns its URL.
-    Returns the process exit code; 0 at once when another copy is running (that copy re-shows its cards)."""
+
+def run(start_sampler):
+    """Show the gadgets and block until PCmeter quits. `start_sampler()` starts telemetry (paused until a
+    card is visible) and returns it. Returns the process exit code; 0 at once when another copy is
+    running (that copy re-shows its cards)."""
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
     if RENDER == "cpu":
-        # Draw on the CPU only. A monitor should not wake the GPU it is watching: Chromium rasters
-        # and composites in software, and Qt Quick (under the web view) uses its software backend.
         os.environ["QT_QUICK_BACKEND"] = "software"
         # Qt's own GL integrations open the GPU at start-up even when nothing draws with GL (a small
         # context shows up in nvidia-smi). Without them, windows are plain shared-memory buffers.
         os.environ["QT_WAYLAND_CLIENT_BUFFER_INTEGRATION"] = "none"
         os.environ["QT_XCB_GL_INTEGRATION"] = "none"
-        flags = "--disable-gpu --disable-gpu-compositing --disable-software-rasterizer"
-        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '')} {flags}".strip()
-    else:
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     QApplication.setApplicationName("PCmeter")
     QApplication.setOrganizationName("PCmeter")
     QApplication.setDesktopFileName(APP_ID)
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
-    if os.environ.get("PCMETER_GPU_INFO"):
-        return _gpu_info(app)
 
     bus = QDBusConnection.sessionBus()
     if bus.isConnected() and not bus.registerService(SERVICE):
         bus.call(QDBusMessage.createMethodCall(SERVICE, OBJECT_PATH, IFACE, "show"))
         return 0
-    url = start_server()
-    ctl = Controller(app, url, bus)   # noqa: F841 (lives as long as the app)
+    telemetry = start_sampler()
+    ctl = Controller(app, telemetry, bus)   # noqa: F841 (lives as long as the app)
     return app.exec()

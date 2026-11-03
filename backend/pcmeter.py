@@ -4,7 +4,8 @@
 Run:  python3 backend/pcmeter.py --open
 Then the UI lives at http://127.0.0.1:8765 and the raw stream at /stream (Server-Sent Events).
 With --app (what the desktop shortcut uses) it shows the CPU and GPU cards as desktop gadgets:
-one frameless, translucent window per card, with no outer window (see desktop.py). With --app --browser it opens
+one frameless, translucent Qt Quick window per card, with no outer window (see desktop.py and qml/);
+the telemetry goes straight into the windows, with no server. With --app --browser it opens
 a Chromium app window instead, reuses a copy that is already running, and quits once its last
 window has been closed for a while.
 
@@ -37,7 +38,7 @@ try:
 except ImportError:
     pynvml = None
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 # A PyInstaller build unpacks the web UI next to the code in sys._MEIPASS.
 WEB_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "web"
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -320,7 +321,8 @@ class Rapl:
 
 
 class CpuSampler:
-    def __init__(self, coolant=None):
+    def __init__(self, proc_every=1.0, coolant=None):
+        self.proc_every = proc_every
         self.coolant = coolant or CoolantSensor()
         self.name = cpu_model()
         self.cores = psutil.cpu_count(logical=False) or 0
@@ -331,6 +333,13 @@ class CpuSampler:
         self.next_proc_scan = 0.0
         self.prev_ticks, self.last_scan = {}, None
         psutil.cpu_percent(percpu=True)  # prime the counters
+
+    def reset(self):
+        """Forget every running counter after a pause, so the first sample after it is not an average over the gap."""
+        psutil.cpu_percent(percpu=True)
+        self.rapl.last = None
+        self.prev_ticks, self.last_scan = {}, None
+        self.next_proc_scan = 0.0
 
     def _scan_procs(self):
         if platform.system() == "Linux":
@@ -394,12 +403,22 @@ class CpuSampler:
         found.sort(key=lambda p: (p["util"], p["mem_mb"]), reverse=True)
         self.procs = found[:10]
 
-    def sample(self):
+    def sample(self, procs=True, full=True):
+        """`procs`: some process list is on screen; `full`: the readouts beside the dial are too (not just the dial)."""
         now = time.monotonic()
-        if now >= self.next_proc_scan:
+        if procs and now >= self.next_proc_scan:
             self._scan_procs()
-            self.next_proc_scan = now + 1.0
+            self.next_proc_scan = now + self.proc_every
+        elif not procs:
+            self.last_scan = None      # the next scan after a gap must not average over it
+            self.prev_ticks = {}
+            self.next_proc_scan = 0.0
         per_core = psutil.cpu_percent(percpu=True)
+        if not full:
+            return {"name": self.name, "cores": self.cores, "threads": self.threads,
+                    "util": sum(per_core) / max(1, len(per_core)), "per_core": per_core,
+                    "temp": _read(self.temp_file, int) / 1000 if self.temp_file else cpu_temp(),
+                    "freq_mhz": None, "power_w": None, "load": None, "procs": []}
         freq = psutil.cpu_freq()
         try:
             load = list(psutil.getloadavg())
@@ -425,9 +444,10 @@ class CpuSampler:
 class NvidiaGpu:
     vendor = "NVIDIA"
 
-    def __init__(self, handle):
+    def __init__(self, handle, proc_every=1.0):
         n = pynvml
         self.h = handle
+        self.proc_every = proc_every
         name = n.nvmlDeviceGetName(handle)
         self.name = name.decode() if isinstance(name, bytes) else name
         self.bus_width = self._try(n.nvmlDeviceGetMemoryBusWidth)
@@ -481,16 +501,19 @@ class NvidiaGpu:
             entry["name"] = _proc_name(entry["pid"])
         self.procs = sorted(found.values(), key=lambda p: (p["util"], p["vram_mb"]), reverse=True)[:10]
 
-    def sample(self):
+    def sample(self, procs=True, full=True):
+        """Only what is on screen is asked of the driver: `full` the readouts beside the dial, `procs` the process list."""
         n = pynvml
         rates = self._try(n.nvmlDeviceGetUtilizationRates)
-        mem = self._try(n.nvmlDeviceGetMemoryInfo)
+        mem = self._try(n.nvmlDeviceGetMemoryInfo) if full else None
         mem_clock = self._try(n.nvmlDeviceGetClockInfo, n.NVML_CLOCK_MEM)
-        power = self._try(n.nvmlDeviceGetPowerUsage)
+        power = self._try(n.nvmlDeviceGetPowerUsage) if full else None
         now = time.monotonic()
-        if now >= self.next_proc_scan:
+        if procs and now >= self.next_proc_scan:
             self._scan_procs()
-            self.next_proc_scan = now + 1.0
+            self.next_proc_scan = now + self.proc_every
+        elif not procs:
+            self.next_proc_scan = 0.0
         mem_util = self._mem_busy()
         if mem_util is None and rates:
             mem_util = float(rates.memory)
@@ -501,10 +524,10 @@ class NvidiaGpu:
             "util": rates.gpu if rates else None,
             "mem_util": mem_util,
             "temp": self._try(n.nvmlDeviceGetTemperature, n.NVML_TEMPERATURE_GPU),
-            "clock_mhz": self._try(n.nvmlDeviceGetClockInfo, n.NVML_CLOCK_GRAPHICS),
+            "clock_mhz": self._try(n.nvmlDeviceGetClockInfo, n.NVML_CLOCK_GRAPHICS) if full else None,
             "power_w": power / 1000 if power is not None else None,
             "power_limit_w": self.power_limit / 1000 if self.power_limit else None,
-            "fan_pct": self._try(n.nvmlDeviceGetFanSpeed),
+            "fan_pct": self._try(n.nvmlDeviceGetFanSpeed) if full else None,
             "vram_used_mb": mem.used / 2**20 if mem else None,
             "vram_total_mb": mem.total / 2**20 if mem else None,
             # Memory-controller busy time x bandwidth at the current memory clock.
@@ -571,7 +594,8 @@ class DrmClients:
 class AmdGpu:
     vendor = "AMD"
 
-    def __init__(self, dev, peak_bw=None):
+    def __init__(self, dev, peak_bw=None, proc_every=2.0):
+        self.proc_every = proc_every
         self.dev = Path(dev)
         hwmons = sorted(self.dev.glob("hwmon/hwmon*"))
         self.hwmon = hwmons[0] if hwmons else None
@@ -588,14 +612,18 @@ class AmdGpu:
         v = _read(self.hwmon / name, int)
         return v / scale if v is not None else None
 
-    def sample(self):
+    def sample(self, procs=True, full=True):
         now = time.monotonic()
-        if now >= self.next_proc_scan:
-            full = now >= self.next_full_scan
-            self.procs = self.clients.scan(full)
-            self.next_proc_scan = now + 2.0
-            if full:
-                self.next_full_scan = now + 10.0
+        if procs and now >= self.next_proc_scan:
+            walk = now >= self.next_full_scan
+            self.procs = self.clients.scan(walk)
+            self.next_proc_scan = now + self.proc_every
+            if walk:
+                self.next_full_scan = now + 5 * self.proc_every
+        elif not procs:
+            self.next_proc_scan = 0.0
+            self.next_full_scan = 0.0
+            self.clients.prev = {}
         mem_util = _read(self.dev / "mem_busy_percent", int)
         used = _read(self.dev / "mem_info_vram_used", int)
         total = _read(self.dev / "mem_info_vram_total", int)
@@ -650,13 +678,13 @@ def load_nvml():
     return False
 
 
-def detect_gpus(amd_peak_bw=None):
+def detect_gpus(amd_peak_bw=None, proc_every=1.0):
     gpus = []
     if load_nvml():
         try:
             pynvml.nvmlInit()
             for i in range(pynvml.nvmlDeviceGetCount()):
-                gpus.append(NvidiaGpu(pynvml.nvmlDeviceGetHandleByIndex(i)))
+                gpus.append(NvidiaGpu(pynvml.nvmlDeviceGetHandleByIndex(i), proc_every))
         except pynvml.NVMLError:
             pass
     if platform.system() == "Linux":
@@ -664,7 +692,7 @@ def detect_gpus(amd_peak_bw=None):
             dev = card / "device"
             if re.fullmatch(r"card\d+", card.name) and _read(dev / "vendor") == "0x1002" \
                     and (dev / "gpu_busy_percent").exists():
-                gpus.append(AmdGpu(dev, amd_peak_bw))
+                gpus.append(AmdGpu(dev, amd_peak_bw, 2 * proc_every))
     return gpus
 
 
@@ -810,11 +838,14 @@ class FanState:
         return None
 
 
+FULL = {"procs": True, "full": True}
+
+
 class Telemetry:
-    def __init__(self, interval, amd_peak_bw, coolant=None, fanctl="auto"):
+    def __init__(self, interval, amd_peak_bw, proc_every=1.0, coolant=None, fanctl="auto"):
         self.interval = interval
-        self.cpu = CpuSampler(coolant)
-        self.gpus = detect_gpus(amd_peak_bw)
+        self.cpu = CpuSampler(proc_every, coolant)
+        self.gpus = detect_gpus(amd_peak_bw, proc_every)
         self.baselines = [DisplayBaseline() for _ in self.gpus]
         self.history = History()
         self.fan = FanState(fanctl, self.history)
@@ -822,43 +853,74 @@ class Telemetry:
         self.latest = None
         self.cond = threading.Condition()
         self.clients = 0
-        self.watched = threading.Event()   # set while at least one stream is open
+        self.local = False                 # the desktop gadgets are on screen (see desktop.py)
+        self.listeners = []                # in-process consumers: called with each snapshot dict
+        self.want = {"cpu": FULL, "gpu": FULL}   # what the gadgets show (None: card hidden); a stream wants everything
+        self.watched = threading.Event()   # set while anyone is looking: a stream is open or a gadget is visible
+        self.paused = threading.Event()    # set while nobody is: ends the sleep between samples at once
+        self.paused.set()
+        self.cold = True                   # counters need priming before the next sample
+
+    def _refresh(self):
+        if self.clients > 0 or self.local:
+            self.paused.clear()
+            self.watched.set()
+        else:
+            self.watched.clear()
+            self.paused.set()
+            self.cold = True
 
     def attach(self, delta):
         with self.cond:
             self.clients += delta
-            if self.clients > 0:
-                self.watched.set()
-            else:
-                self.watched.clear()
+            self._refresh()
+
+    def set_local(self, on):
+        """Gadgets visible and the session unlocked: sample. Otherwise wait on an event, using no CPU."""
+        self.local = bool(on)
+        self._refresh()
 
     def run(self):
         while True:
             self.watched.wait()   # no window open: sleep instead of sampling
+            if self.cold:         # first sample after a pause: don't average over the gap
+                self.cold = False
+                self.cpu.reset()
+                self.paused.wait(0.25)
+                if not self.watched.is_set():
+                    continue
             started = time.monotonic()
+            # A stream (the browser page) shows everything; gadgets only what their views show.
+            want = self.want if self.clients == 0 else {"cpu": FULL, "gpu": FULL}
             gpus = []
             for gpu, baseline in zip(self.gpus, self.baselines):
+                if want["gpu"] is None:
+                    break
                 try:
-                    gpus.append(subtract_display(gpu.sample(), baseline))
+                    gpus.append(subtract_display(gpu.sample(**want["gpu"]), baseline))
                 except Exception as exc:  # one flaky device should not stop the stream
                     gpus.append({"name": gpu.name, "vendor": gpu.vendor, "error": str(exc)})
             now = time.time()
-            cpu = self.cpu.sample()
+            cpu = self.cpu.sample(**want["cpu"]) if want["cpu"] is not None else None
             fan = self.fan.read(now)
-            self.history.add(now, cpu.get("coolant_temp"), cpu.get("temp"),
-                             gpus[0].get("temp") if gpus else None)
-            snapshot = json.dumps({
+            if cpu is not None:
+                self.history.add(now, cpu.get("coolant_temp"), cpu.get("temp"),
+                                 gpus[0].get("temp") if gpus else None)
+            snap = {
                 "t": now,
                 "interval": self.interval,
                 "host": self.host,
                 "cpu": cpu,
                 "gpus": gpus,
                 "fan": fan,
-            })
-            with self.cond:
-                self.latest = snapshot
-                self.cond.notify_all()
-            time.sleep(max(0.0, self.interval - (time.monotonic() - started)))
+            }
+            if self.clients > 0:
+                with self.cond:
+                    self.latest = json.dumps(snap)
+                    self.cond.notify_all()
+            for fn in self.listeners:
+                fn(snap)
+            self.paused.wait(max(0.0, self.interval - (time.monotonic() - started)))
 
 
 def make_handler(telemetry):
@@ -1039,12 +1101,15 @@ def main():
         return telemetry, server, url
 
     if desktop is not None:
-        # Qt owns the main thread; the server runs beside it and dies with the gadgets.
-        def serve_in_background():
-            _, server, url = start()
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            return url
-        sys.exit(desktop.run(serve_in_background))
+        # Qt owns the main thread; the sampler runs beside it and feeds the windows directly (no
+        # server). It starts paused and samples only while a gadget is visible and the session unlocked.
+        def start_sampler():
+            telemetry = Telemetry(args.interval, args.amd_peak_bw, proc_every=5.0)
+            threading.Thread(target=telemetry.run, daemon=True).start()
+            gpu_names = ", ".join(g.name for g in telemetry.gpus) or "none found"
+            print(f"PCmeter {__version__}\n  CPU: {telemetry.cpu.name}\n  GPU: {gpu_names}", flush=True)
+            return telemetry
+        sys.exit(desktop.run(start_sampler))
 
     telemetry, server, url = start()
     if args.app:
