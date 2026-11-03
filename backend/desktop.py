@@ -23,12 +23,14 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import ClassInfo, Property, QEvent, QObject, QPoint, QSettings, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import ClassInfo, Property, QObject, QPoint, QSettings, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtDBus import QDBusConnection, QDBusMessage
 from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon, QSurfaceFormat, QWindow
-from PySide6.QtQml import QQmlEngine
-from PySide6.QtQuick import QQuickView
+from PySide6.QtQml import QQmlComponent, QQmlEngine
+from PySide6.QtQuick import QQuickWindow
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+
+from shiboken6 import getCppPointer, wrapInstance
 
 import kwin
 import wlblur
@@ -186,39 +188,63 @@ class Bridge(QObject):
     def dismiss(self):
         self.gadget.ctl.set_card(self.gadget.key, False)
 
+    @Slot(result=bool)
+    def closeRequested(self):
+        """The window is closing (Alt+F4 and the like): dismiss the card instead, unless PCmeter is quitting."""
+        if self.gadget.ctl.quitting:
+            return True
+        self.gadget.ctl.set_card(self.gadget.key, False)
+        return False
 
-class Gadget(QQuickView):
+
+class Gadget(QObject):
+    """One card: a facade over a native Qt Quick window created by qml/GadgetWindow.qml.
+
+    The window is deliberately not a Python subclass of QQuickView. PySide takes the GIL on every virtual
+    call of a Python-derived object, from whichever thread makes it; the GUI thread holds the GIL while it
+    waits for the render thread, so a threaded render loop deadlocks. A window made by the QML engine is
+    plain C++, and the render thread never needs Python. Window methods not defined here (show, x, width,
+    grabWindow...) are forwarded to it."""
+
     def __init__(self, ctl, key, label):
-        super().__init__(ctl.engine, None)
+        super().__init__(ctl)
         self.ctl, self.key, self.label = ctl, key, label
-        self.setFlags(Gadget.flags_for(ctl))
-        fmt = QSurfaceFormat()
-        fmt.setAlphaBufferSize(8)
-        self.setFormat(fmt)
-        self.setColor(QColor(0, 0, 0, 0))
-        self.setTitle(caption(label))
-        self.setIcon(ctl.icon)
-        self.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
         self.radius = 0.0
         self.fixed_width = False
         self.wanted = False          # should be on screen once the card has its size
         self.sized = False
+        self.bridge = Bridge(self)
+        component = QQmlComponent(ctl.engine, QUrl.fromLocalFile(str(QML_DIR / "GadgetWindow.qml")))
+        made = component.createWithInitialProperties({"cardKey": key, "host": self.bridge, "feed": ctl.feed})
+        self.win = wrapInstance(getCppPointer(made)[0], QQuickWindow)     # typed as a QQuickWindow (grabWindow)
+        for error in component.errors():
+            print(f"[{key}] {error.toString()}", file=sys.stderr, flush=True)
+        self._component = component
+        win = self.win
+        win.setFlags(Gadget.flags_for(ctl))
+        fmt = QSurfaceFormat()
+        fmt.setAlphaBufferSize(8)
+        win.setFormat(fmt)
+        win.setTitle(caption(label))
+        win.setIcon(ctl.icon)
         self.width_saved = QTimer(self, singleShot=True, interval=500, timeout=self._save_geometry)
-
         width = int(ctl.store.value(f"{key}/width", DEFAULT_WIDTH))
         width = max(MIN_WIDTH, min(MAX_WIDTH, width))
-        self.setMinimumWidth(MIN_WIDTH)
-        self.setMaximumWidth(MAX_WIDTH)
-        self.resize(width, 620)
-
-        self.bridge = Bridge(self)
-        self.setInitialProperties({"cardKey": key, "host": self.bridge, "feed": ctl.feed})
-        self.setSource(QUrl.fromLocalFile(str(QML_DIR / "Card.qml")))
-        for error in self.errors():
-            print(f"[{key}] {error.toString()}", file=sys.stderr, flush=True)
+        win.setMinimumWidth(MIN_WIDTH)
+        win.setMaximumWidth(MAX_WIDTH)
+        win.resize(width, 620)
         self.reveal = QTimer(self, singleShot=True, interval=2500, timeout=self._reveal)
-        self.visibleChanged.connect(lambda _: ctl.update_presence())
-        self.visibilityChanged.connect(lambda _: ctl.update_presence())
+        win.visibleChanged.connect(lambda _: ctl.update_presence())
+        win.visibilityChanged.connect(lambda _: ctl.update_presence())
+        win.widthChanged.connect(self._resized)
+        win.heightChanged.connect(self._resized)
+        win.xChanged.connect(self._moved)
+        win.yChanged.connect(self._moved)
+
+    def __getattr__(self, name):             # only reached for what Gadget does not define
+        if name == "win":
+            raise AttributeError(name)
+        return getattr(self.win, name)
 
     @staticmethod
     def flags_for(ctl):
@@ -254,15 +280,8 @@ class Gadget(QQuickView):
         if self.isVisible():
             self._save_geometry()
             if self.ctl.wayland:
-                wlblur.clear_blur(self)
+                wlblur.clear_blur(self.win)
             self.hide()
-
-    def event(self, e):                      # Alt+F4 and the like dismiss the card
-        if e.type() == QEvent.Type.Close and not self.ctl.quitting:
-            e.ignore()
-            self.ctl.set_card(self.key, False)
-            return True
-        return super().event(e)
 
     # ---- size, shape and blur
     def content_size(self, width, height, radius):
@@ -288,14 +307,12 @@ class Gadget(QQuickView):
             self._reveal()
         self.update_blur()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
+    def _resized(self, *_):
         self.update_blur()
         if self.isVisible():
             self.width_saved.start()
 
-    def moveEvent(self, event):
-        super().moveEvent(event)
+    def _moved(self, *_):
         if self.isVisible() and not self.ctl.wayland:
             self.width_saved.start()
 
@@ -310,9 +327,9 @@ class Gadget(QQuickView):
             return
         rects = rounded_rects(self.width(), self.height(), self.radius)
         if self.ctl.wayland:
-            wlblur.set_blur(self, rects)
+            wlblur.set_blur(self.win, rects)
         elif QGuiApplication.platformName() == "xcb":
-            _blur_behind_x11(self, rects)
+            _blur_behind_x11(self.win, rects)
 
     def set_above(self, above):
         if self.ctl.wayland:
@@ -664,9 +681,6 @@ def run(start_sampler):
         import faulthandler, signal
         faulthandler.register(signal.SIGUSR1, all_threads=True)     # kill -USR1 <pid>: dump every Python stack
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
-    # Render on the GUI thread. The threaded loop deadlocks with the Python event() override on Gadget: the
-    # GUI thread holds the GIL while it waits for the render thread, which wants the GIL to deliver an event.
-    os.environ.setdefault("QSG_RENDER_LOOP", "basic")
     if RENDER == "cpu":
         os.environ["QT_QUICK_BACKEND"] = "software"
         # Qt's own GL integrations open the GPU at start-up even when nothing draws with GL (a small
