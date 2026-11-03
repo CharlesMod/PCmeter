@@ -2,16 +2,15 @@ import QtQuick
 import "Skins.js" as Skins
 import "Fmt.js" as F
 
-// Per-thread bars with peak-hold markers, like an audio level meter. The bars are plain items with
-// Behaviors: each glides from one sample to the next over the sample interval and then rests. Nothing
-// is redrawn by script; between samples the scene graph moves rectangles, and only while they move.
+// Per-thread bars with peak-hold markers, like an audio level meter. The bars are plain items sized from
+// `values`/`peaks`; the card eases those from one sample to the next on its own 24 fps tick (QML
+// Behaviors would run at the display's refresh rate) and stops when they arrive.
 Item {
     id: cores
     property var sk
     property var acc
     property var values: []        // 0..1 per thread
     property var peaks: []
-    property int interval: 500     // ms between samples
     readonly property int n: values.length
     readonly property real gap: n > 24 ? 2 : 3
     readonly property real bw: n > 0 ? (width - gap * (n - 1)) / n : 0
@@ -32,8 +31,6 @@ Item {
                 width: parent.width; clip: true
                 height: Math.max(1.5, v * cores.barH); y: cores.barH - height
                 opacity: .35 + .65 * v
-                Behavior on height { NumberAnimation { duration: cores.interval * .9; easing.type: Easing.InOutQuad } }
-                Behavior on opacity { NumberAnimation { duration: cores.interval * .9 } }
                 Rectangle {          // the gradient spans the full bar height, so short bars show only its dim foot
                     width: parent.width; height: cores.barH; y: fill.height - cores.barH
                     gradient: Gradient {
@@ -46,7 +43,6 @@ Item {
                 width: parent.width; height: 1.5
                 y: Math.max(0, cores.barH - F.clamp(cores.peaks[index] || 0) * cores.barH - 1.5)
                 color: cores.sk ? Skins.qt([cores.sk.fg[0], cores.sk.fg[1], cores.sk.fg[2], .8]) : "white"
-                Behavior on y { NumberAnimation { duration: cores.interval * .9 } }
             }
             Text {
                 visible: index % cores.every === 0

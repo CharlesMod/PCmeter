@@ -34,8 +34,11 @@ it for its menu and dismiss buttons. The menu (also in the system tray) picks th
 again brings back any card you dismissed. On KDE Plasma (Wayland) the cards return to where you left
 them. NVIDIA cards need the proprietary driver; AMD cards work out of the box.
 
-The gadgets draw on the CPU only, at 24 frames a second with film-style motion blur, so watching the
-GPU never wakes it. `PCMETER_RENDER=gpu` lets them use the GPU instead. `pcmeter --app --browser`
+The gadgets are native Qt Quick (`qml/`, no browser engine). They draw on the CPU only, at up to 24
+frames a second with film-style motion blur and only while something moves, so watching the GPU never
+wakes it. `PCMETER_RENDER=gpu` lets them use the GPU instead (not every driver stack supports it).
+While the session is locked, the cards are hidden or all dismissed, the sampler sleeps on an event and
+nothing is drawn. The process lists are scanned every 5 s, and only while a card's list is open. `pcmeter --app --browser`
 opens the old single-page app window in Chrome, Chromium, Brave, Edge or Vivaldi instead.
 
 **Clicks**: each card's activity strip has a speaker button that mutes or unmutes that card (cards

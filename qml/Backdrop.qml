@@ -9,6 +9,7 @@ Canvas {
     property var sk
     property var accent
     renderTarget: Canvas.Image
+    renderStrategy: Canvas.Immediate
     onSkChanged: requestPaint()
     onAccentChanged: requestPaint()
     onWidthChanged: requestPaint()

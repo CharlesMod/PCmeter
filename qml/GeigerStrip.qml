@@ -80,6 +80,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             height: 34
             renderTarget: Canvas.Image
+            renderStrategy: Canvas.Immediate
             onWidthChanged: requestPaint()
             property bool blank: false
             onPaint: {

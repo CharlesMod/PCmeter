@@ -13,6 +13,7 @@ Canvas {
     property int points: 120
     property int rev: 0               // bumped by the card after it changes `series`
     renderTarget: Canvas.Image
+    renderStrategy: Canvas.Immediate
     onRevChanged: requestPaint()
     onSkChanged: requestPaint()
     onAccChanged: requestPaint()

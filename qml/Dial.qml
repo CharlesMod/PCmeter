@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Shapes
 import "Skins.js" as Skins
 import "Fmt.js" as F
 
@@ -40,6 +39,7 @@ Item {
         id: face
         anchors.fill: parent
         renderTarget: Canvas.Image
+        renderStrategy: Canvas.Immediate
         Connections { target: dial; function onSkChanged() { face.requestPaint() } function onZonesChanged() { face.requestPaint() } }
         onPaint: {
             var sk = dial.sk
@@ -97,43 +97,56 @@ Item {
         }
     }
 
-    // value arc: five segments whose alpha rises along the sweep (Shapes cannot stroke with a gradient)
-    Shape {
-        anchors.fill: parent
-        visible: dial.load > 0.004
-        preferredRendererType: Shape.GeometryRenderer
-        ShapePath {      // glow under the arc
-            strokeColor: Skins.qt(dial.acc, .22 * Math.min(1, dial.sk ? dial.sk.glow : 1)); strokeWidth: 4 + 6 * (dial.sk ? dial.sk.glow : 1)
-            fillColor: "transparent"; capStyle: ShapePath.RoundCap
-            PathAngleArc { centerX: dial.cx; centerY: dial.cy; radiusX: dial.ra; radiusY: dial.ra; startAngle: 135; sweepAngle: 270 * F.clamp(dial.load) }
-        }
-        ShapePath {
-            strokeColor: Skins.qt(dial.acc, .35); strokeWidth: 4; fillColor: "transparent"; capStyle: ShapePath.RoundCap
-            PathAngleArc { centerX: dial.cx; centerY: dial.cy; radiusX: dial.ra; radiusY: dial.ra; startAngle: 135; sweepAngle: 270 * Math.min(F.clamp(dial.load), .2) }
-        }
-        ShapePath {
-            strokeColor: Skins.qt(dial.acc, .55); strokeWidth: 4; fillColor: "transparent"; capStyle: ShapePath.FlatCap
-            PathAngleArc { centerX: dial.cx; centerY: dial.cy; radiusX: dial.ra; radiusY: dial.ra; startAngle: 135 + 270 * .2; sweepAngle: 270 * F.clamp(dial.load - .2, 0, .2) }
-        }
-        ShapePath {
-            strokeColor: Skins.qt(dial.acc, .75); strokeWidth: 4; fillColor: "transparent"; capStyle: ShapePath.FlatCap
-            PathAngleArc { centerX: dial.cx; centerY: dial.cy; radiusX: dial.ra; radiusY: dial.ra; startAngle: 135 + 270 * .4; sweepAngle: 270 * F.clamp(dial.load - .4, 0, .2) }
-        }
-        ShapePath {
-            strokeColor: Skins.qt(dial.acc, .92); strokeWidth: 4; fillColor: "transparent"; capStyle: ShapePath.FlatCap
-            PathAngleArc { centerX: dial.cx; centerY: dial.cy; radiusX: dial.ra; radiusY: dial.ra; startAngle: 135 + 270 * .6; sweepAngle: 270 * F.clamp(dial.load - .6, 0, .2) }
-        }
-        ShapePath {
-            strokeColor: Skins.qt(dial.acc, 1); strokeWidth: 4; fillColor: "transparent"; capStyle: ShapePath.RoundCap
-            PathAngleArc { centerX: dial.cx; centerY: dial.cy; radiusX: dial.ra; radiusY: dial.ra; startAngle: 135 + 270 * .8; sweepAngle: 270 * F.clamp(dial.load - .8, 0, .2) }
-        }
-    }
+    // The moving parts (value arc and both needles) are one canvas, repainted on each animation tick.
+    // Shapes would re-triangulate their paths in every polish pass, which cost several times more.
+    // One call per animation tick: set all four positions, then repaint once.
+    function move(l, lf, t, tf) { load = l; loadFrom = lf; temp = t; tempFrom = tf; live.requestPaint() }
 
-    Needle {
-        cx: dial.cx; cy: dial.cy; r0: dial.ra - 9; r1: dial.rad - 2; halfWidth: 2.2
-        fill: dial.sk ? Skins.qt(dial.sk.needle) : "white"
-        halo: Skins.qt(dial.acc, .9 * .28 * Math.min(1, dial.sk ? dial.sk.glow : 1)); haloWidth: 1 + 3 * (dial.sk ? dial.sk.glow : 1)
-        from: dial.ang(dial.loadFrom); to: dial.ang(dial.load)
+    Canvas {
+        id: live
+        anchors.fill: parent
+        renderTarget: Canvas.Image
+        renderStrategy: Canvas.Immediate
+        Connections {
+            target: dial
+            function onTempCChanged() { live.requestPaint() }
+            function onSkChanged() { live.requestPaint() }
+            function onAccChanged() { live.requestPaint() }
+        }
+        function needle(ctx, cx, cy, r0, r1, hw, fill, halo, haloW, from, to) {
+            var smear = Math.abs(to - from) * r1 > 1.2
+            for (var i = smear ? 0 : 3; i < 4; i++) {      // a few faint exposures, then the sharp one
+                ctx.save(); ctx.translate(cx, cy); ctx.rotate(from + (to - from) * i / 3)
+                ctx.globalAlpha = i === 3 ? 1 : .22
+                ctx.beginPath(); ctx.moveTo(r0, -hw); ctx.lineTo(r1, 0); ctx.lineTo(r0, hw); ctx.closePath()
+                if (i === 3 && haloW > 0) { ctx.strokeStyle = halo; ctx.lineWidth = haloW; ctx.lineJoin = "round"; ctx.stroke() }
+                ctx.fillStyle = fill; ctx.fill(); ctx.restore()
+            }
+        }
+        onPaint: {
+            var sk = dial.sk
+            if (!sk || width < 2) return
+            var ctx = getContext("2d"); ctx.reset()
+            var glow = Math.min(1, sk.glow), u = F.clamp(dial.load), segs = [.35, .55, .75, .92, 1]
+            if (u > 0.004) {
+                ctx.lineCap = "round"; ctx.strokeStyle = Skins.css(dial.acc, .22 * glow); ctx.lineWidth = 4 + 6 * glow
+                ctx.beginPath(); ctx.arc(dial.cx, dial.cy, dial.ra, dial.a0, dial.a0 + dial.sweep * u); ctx.stroke()
+                ctx.lineWidth = 4
+                for (var k = 0; k < 5; k++) {       // alpha rises along the sweep (a canvas stroke has no gradient)
+                    var lo = k * .2, hi = Math.min(u, lo + .2)
+                    if (hi <= lo) break
+                    ctx.lineCap = k === 0 || k === 4 ? "round" : "butt"; ctx.strokeStyle = Skins.css(dial.acc, segs[k])
+                    ctx.beginPath(); ctx.arc(dial.cx, dial.cy, dial.ra, dial.a0 + dial.sweep * lo, dial.a0 + dial.sweep * hi); ctx.stroke()
+                }
+            }
+            needle(ctx, dial.cx, dial.cy, dial.ra - 9, dial.rad - 2, 2.2, Skins.css(sk.needle),
+                   Skins.css(dial.acc, .9 * .28 * glow), 1 + 3 * glow, dial.ang(dial.loadFrom), dial.ang(dial.load))
+            if (dial.tempC !== null) {
+                var c = dial.tempC, tc = c >= dial.zones[1] ? sk.hot : c >= dial.zones[0] ? sk.warn : sk.cool
+                needle(ctx, dial.sx, dial.sy, dial.sr * .5, dial.sr - 1, 1.4, Skins.css(tc, .9), "", 0,
+                       dial.ang(dial.tempFrom), dial.ang(dial.temp))
+            }
+        }
     }
 
     // readout: the big percentage, centred with its unit
@@ -152,14 +165,7 @@ Item {
         x: big.x + big.width + 2; y: dial.cy + dial.rad * .1 - baselineOffset
     }
 
-    // temperature needle and reading
-    Needle {
-        visible: dial.tempC !== null
-        cx: dial.sx; cy: dial.sy; r0: dial.sr * .5; r1: dial.sr - 1; halfWidth: 1.4
-        fill: dial.tempC === null || !dial.sk ? "white" : dial.zoneColor(dial.tempC)
-        halo: fill; haloWidth: 0
-        from: dial.ang(dial.tempFrom); to: dial.ang(dial.temp)
-    }
+    // temperature reading
     Text {
         text: dial.tempC === null ? "—" : Math.round(dial.tempC) + "°"
         font.family: dial.sk ? dial.sk.num : ""; font.pixelSize: Math.round(dial.sr * .42)

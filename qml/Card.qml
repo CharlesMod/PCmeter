@@ -34,8 +34,13 @@ Item {
     property string peakText: "peak —"
     property var rows: ({})                  // label -> [value, unit]
     property real vramFrac: 0
-    property var cores: []
+    property var cores: []                   // what the bars show now (eased)
     property var peaks: []
+    property var coresFrom: []
+    property var coresTo: []
+    property var peaksFrom: []
+    property var peaksTo: []
+    property real coresAt: 0                 // when the bars started moving toward coresTo
     property string threadsCap: "—"
     property var procs: []
     property string procCap: ""
@@ -53,6 +58,7 @@ Item {
     property bool animating: false
     property real lastT: 0
     property int ticks: 0
+    property bool skip: false
     function nowS() { return Date.now() / 1000 }
     function spring(s, dt) {
         s.v += (58 * (s.t - s.x) - 11.5 * s.v) * dt
@@ -61,12 +67,25 @@ Item {
         return true
     }
     function step() {
-        var now = nowS(), dt = Math.min(.1, now - lastT), shut = dt * .5
+        var now = nowS()
+        // Half rate (12 fps) while nothing quick is happening: the needles creep less than a pixel a frame,
+        // the LED is dark and no count is due in the next 90 ms (the tape alone scrolls 5 px a frame).
+        if (Math.abs(ld.v) * 375 < 24 && Math.abs(tp.v) * 60 < 24 && cores === coresTo && geiger.lit === 0 &&
+            (geiger.fired >= geiger.evT.length || geiger.evT[geiger.fired] - now > .09) && (skip = !skip)) return
+        var dt = Math.min(.1, now - lastT), shut = dt * .5
         lastT = now
         var moving = spring(ld, dt)
         moving = spring(tp, dt) || moving
-        dial.load = ld.x; dial.loadFrom = ld.x - ld.v * shut
-        dial.temp = tp.x; dial.tempFrom = tp.x - tp.v * shut
+        dial.move(ld.x, ld.x - ld.v * shut, tp.x, tp.x - tp.v * shut)
+        var u = F.clamp((now - coresAt) / (sampleMs * .0009))
+        if (u < 1) {
+            var e = u < .5 ? 2 * u * u : 1 - 2 * (1 - u) * (1 - u), k, a = [], b = []
+            for (k = 0; k < coresTo.length; k++) {
+                a.push(coresFrom[k] + (coresTo[k] - coresFrom[k]) * e)
+                b.push(peaksFrom[k] + (peaksTo[k] - peaksFrom[k]) * u)
+            }
+            cores = a; peaks = b; moving = true
+        } else if (cores !== coresTo) { cores = coresTo; peaks = peaksTo }
         var was = geiger.busy
         var busy = geiger.step(now, dt)
         geiger.shut = shut
@@ -109,12 +128,14 @@ Item {
                 for (k = 0; k < pc.length; k++) { if (pc[k] > pc[bi]) bi = k; if (pc[k] > 50) hi++ }
                 r.d = ["#" + bi + " · " + F.fmt(pc[bi]), "%"]
                 threadsCap = hi + " of " + pc.length + " above 50%"
-                var v = [], pk = peaks.length === pc.length ? peaks.slice() : []
+                var v = [], pk = peaksTo.length === pc.length ? peaksTo.slice() : []
                 for (k = 0; k < pc.length; k++) {
                     var x = pc[k] / 100
                     v.push(x); pk[k] = pk[k] === undefined || x >= pk[k] ? x : Math.max(x, pk[k] - .06)
                 }
-                cores = v; peaks = pk
+                coresFrom = cores.length === pc.length ? cores : v; peaksFrom = peaks.length === pc.length ? peaks : pk
+                coresTo = v; peaksTo = pk; coresAt = nowS()
+                if (!cores.length) { cores = v; peaks = pk }
             }
             F.push(hist, c.util || 0, 120)
             peakText = "peak " + Math.round(Math.max.apply(null, hist)) + "%"
@@ -313,7 +334,7 @@ Item {
                 Text { text: "PER THREAD"; font.pixelSize: 10; font.letterSpacing: 1.1; font.weight: Font.DemiBold; font.family: root.sk.ui; color: Skins.qt(root.sk.ink2) }
                 Text { anchors.right: parent.right; text: root.threadsCap; font.pixelSize: 11; font.family: root.sk.num; color: Skins.qt(root.sk.ink3) }
             }
-            Cores { width: parent.width; height: 70; sk: root.sk; acc: root.acc; values: root.cores; peaks: root.peaks; interval: root.sampleMs }
+            Cores { width: parent.width; height: 70; sk: root.sk; acc: root.acc; values: root.cores; peaks: root.peaks }
         }
         Column {
             visible: !root.isCpu && root.present && !root.compact && !root.gauge
