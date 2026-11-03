@@ -20,6 +20,7 @@ import ctypes
 import math
 import os
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import ClassInfo, Property, QEvent, QObject, QPoint, QSettings, Qt, QTimer, QUrl, Signal, Slot
@@ -39,10 +40,11 @@ SKINS = (("glass", "Glass"), ("matrix", "Matrix"), ("hive", "Hive"), ("windows",
          ("mac", "macOS"), ("linux", "Linux"), ("dark", "Dark"), ("white", "White"))
 VIEWS = (("full", "Full"), ("compact", "Compact"), ("gauge", "Gauges only"))
 DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH = 440, 340, 900
-# The cards are drawn by Qt Quick. "cpu" (default) uses its software renderer: a monitor should not
-# wake the GPU it is watching (an NVIDIA context shows up in nvidia-smi and holds the card out of its
-# idle clocks). "gpu" uses Qt's default hardware renderer (RHI: OpenGL or Vulkan).
-RENDER = os.environ.get("PCMETER_RENDER", "cpu")
+# The cards are drawn by Qt Quick. "gpu" (default) uses its hardware renderer (RHI: OpenGL or Vulkan): on
+# a real desktop it idles near 0.3% of a core. "cpu" (PCMETER_RENDER=cpu) is the software renderer, for
+# hosts with no usable GL (about 15% of a core when drawing a 4K card).
+RENDER = os.environ.get("PCMETER_RENDER", "gpu")
+DEBUG = bool(os.environ.get("PCMETER_DEBUG"))
 QML_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "qml"
 
 
@@ -76,6 +78,16 @@ def is_true(v):
     return v in ("true", True)
 
 
+def _unwrap(value):
+    """A D-Bus variant's payload (PySide hands back QDBusVariant, or the plain value)."""
+    return value.variant() if hasattr(value, "variant") else value
+
+
+def _path(value):
+    value = _unwrap(value)
+    return str(value.path()) if hasattr(value, "path") else str(value)
+
+
 class Feed(QObject):
     """The latest telemetry snapshot, as a property the cards bind to. `push` is called on the sampler thread."""
     snapshotChanged = Signal()
@@ -84,6 +96,7 @@ class Feed(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._snap = {}
+        self._logged = 0.0
         self._arrive.connect(self._store)          # queued: delivered on the Qt thread
 
     def push(self, snap):
@@ -92,6 +105,11 @@ class Feed(QObject):
     @Slot(object)
     def _store(self, snap):
         self._snap = snap
+        if DEBUG and time.monotonic() - self._logged > 10:     # PCMETER_DEBUG=1: one summary line per 10 s
+            self._logged = time.monotonic()
+            cpu, gpus = snap.get("cpu"), snap.get("gpus") or []
+            print("pcmeter: snapshot cpu=%s gpus=%s" % (cpu and "%s%%" % cpu.get("util"),
+                  [g.get("name") or g.get("error") for g in gpus]), file=sys.stderr, flush=True)
         self.snapshotChanged.emit()
 
     snapshot = Property("QVariant", lambda self: self._snap, notify=snapshotChanged)
@@ -364,6 +382,8 @@ class Controller(QObject):
 
         self.gadgets = {key: Gadget(self, key, label) for key, label in CARDS}
         self._watch_lock()
+        if os.environ.get("PCMETER_SHOTS"):
+            self._debug_shots(os.environ["PCMETER_SHOTS"])
         shown = [key for key, _ in CARDS if self.store.value(f"{key}/shown", "true") in ("true", True)]
         for key in shown or [key for key, _ in CARDS]:      # all dismissed last time: show them all
             self.set_card(key, True)
@@ -379,6 +399,14 @@ class Controller(QObject):
             self.update_wants()
 
     # ---- presence: sample and animate only while a card can be seen
+    def _debug_shots(self, folder):
+        """PCMETER_SHOTS=dir: save each card window (its own grabWindow, not the screen) after 12 s and every 60 s."""
+        def shoot():
+            for k, g in self.gadgets.items():
+                if g.isVisible():
+                    g.grabWindow().save(f"{folder}/host-{self.skin}-{self.view}-{k}.png")
+        QTimer.singleShot(12000, shoot)
+
     def update_wants(self):
         """Ask the sampler for just what the visible cards show: the process list in the full view, the
         readouts beside the dial in the full and compact views, the dial alone in gauges."""
@@ -395,6 +423,10 @@ class Controller(QObject):
         for k, g in self.gadgets.items():
             g.bridge.set_active(seen[k])
         present = any(seen.values())
+        if DEBUG:
+            print("pcmeter: presence locked=%s (screensaver=%s logind=%s) cards=%s" % (
+                locked, self.screensaver, self.logind,
+                {k: (g.isVisible(), g.visibility().name) for k, g in self.gadgets.items()}), file=sys.stderr, flush=True)
         if present != self.present:
             self.present = present
             self.telemetry.set_local(present)
@@ -414,13 +446,20 @@ class Controller(QObject):
         if not system.isConnected():
             return
         manager = ("org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager")
+        # A service started by systemd --user is outside the logind session, so GetSessionByPID can fail:
+        # use the session id from the environment first. If nothing is found we cannot know, so the cards stay
+        # "watched" (never "locked"); KDE's ScreenSaver signal still covers a lock.
+        def call(*args, **kw):
+            m = QDBusMessage.createMethodCall(*args)
+            m.setArguments(kw.get("args", []))
+            r = system.call(m, timeout=500)
+            return r.arguments() if r.type() == QDBusMessage.MessageType.ReplyMessage and r.arguments() else None
         sid = os.environ.get("XDG_SESSION_ID")
-        msg = QDBusMessage.createMethodCall(*manager, "GetSession" if sid else "GetSessionByPID")
-        msg.setArguments([sid] if sid else [os.getpid()])
-        reply = system.call(msg, timeout=500)
-        if reply.type() != QDBusMessage.MessageType.ReplyMessage or not reply.arguments():
+        found = call(*manager[:2], manager[2], "GetSession", args=[sid]) if sid else None
+        found = found or call(*manager[:2], manager[2], "GetSessionByPID", args=[os.getpid()])
+        if not found:
             return
-        self.session_path = str(reply.arguments()[0].path()) if hasattr(reply.arguments()[0], "path") else str(reply.arguments()[0])
+        self.session_path = _path(found[0])
         system.connect("org.freedesktop.login1", self.session_path, "org.freedesktop.DBus.Properties",
                        "PropertiesChanged", self, "1logindChanged()")
         system.connect("org.freedesktop.login1", self.session_path, "org.freedesktop.login1.Session",
@@ -451,8 +490,7 @@ class Controller(QObject):
         msg.setArguments(["org.freedesktop.login1.Session", "LockedHint"])
         reply = QDBusConnection.systemBus().call(msg, timeout=500)
         if reply.type() == QDBusMessage.MessageType.ReplyMessage and reply.arguments():
-            value = reply.arguments()[0]
-            self.logind = bool(value.value() if hasattr(value, "value") else value)
+            self.logind = _unwrap(reply.arguments()[0]) is True
             self.update_presence()
 
     def _load_placer(self):
@@ -622,7 +660,13 @@ def run(start_sampler):
     """Show the gadgets and block until PCmeter quits. `start_sampler()` starts telemetry (paused until a
     card is visible) and returns it. Returns the process exit code; 0 at once when another copy is
     running (that copy re-shows its cards)."""
+    if DEBUG:
+        import faulthandler, signal
+        faulthandler.register(signal.SIGUSR1, all_threads=True)     # kill -USR1 <pid>: dump every Python stack
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+    # Render on the GUI thread. The threaded loop deadlocks with the Python event() override on Gadget: the
+    # GUI thread holds the GIL while it waits for the render thread, which wants the GIL to deliver an event.
+    os.environ.setdefault("QSG_RENDER_LOOP", "basic")
     if RENDER == "cpu":
         os.environ["QT_QUICK_BACKEND"] = "software"
         # Qt's own GL integrations open the GPU at start-up even when nothing draws with GL (a small
