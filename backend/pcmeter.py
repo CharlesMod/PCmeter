@@ -716,12 +716,108 @@ def subtract_display(g, baseline):
     return g
 
 
+class History:
+    """Ring buffer of 5 s averages (coolant, die, gpu0 temps) plus fan override events."""
+    BUCKET = 5.0
+    MAXLEN = 1440   # 2 h
+
+    def __init__(self, bucket=BUCKET, maxlen=MAXLEN):
+        self.bucket = bucket
+        self.maxlen = maxlen
+        self.samples = deque(maxlen=maxlen)
+        self.events = deque(maxlen=500)
+        self.lock = threading.Lock()
+        self.start = None
+        self.acc = [[0.0, 0], [0.0, 0], [0.0, 0]]
+
+    def add(self, t, coolant, die, gpu):
+        """Feed one reading (None for missing); flushes a sample once a bucket has elapsed."""
+        if self.start is None:
+            self.start = t
+        for a, v in zip(self.acc, (coolant, die, gpu)):
+            if isinstance(v, (int, float)):
+                a[0] += v
+                a[1] += 1
+        if t - self.start >= self.bucket:
+            row = [round(t, 1)] + [round(a[0] / a[1], 1) if a[1] else None for a in self.acc]
+            with self.lock:
+                self.samples.append(row)
+            self.start = None
+            self.acc = [[0.0, 0], [0.0, 0], [0.0, 0]]
+
+    def event(self, t, on, trigger):
+        with self.lock:
+            self.events.append({"t": round(t, 1), "on": on, "trigger": trigger})
+
+    def payload(self):
+        with self.lock:
+            samples = list(self.samples)
+            events = list(self.events)
+        if samples:
+            cutoff = samples[0][0]
+            events = [e for e in events if e["t"] >= cutoff]
+        return {"interval": int(self.bucket), "samples": samples, "events": events}
+
+
+FANCTL_PATHS = ("/run/fanctl/state.json", "/run/host/run/fanctl/state.json")
+
+
+class FanState:
+    """Reads the state file written by fanctl (absent on most machines; errors are silent)."""
+    EVERY = 2.0
+    STALE = 15.0
+
+    def __init__(self, path="auto", history=None, paths=FANCTL_PATHS):
+        self.paths = [] if path == "none" else ([path] if path != "auto" else list(paths))
+        self.history = history
+        self.checked = None
+        self.value = None
+        self.override = None   # last seen override flag
+
+    def read(self, now=None):
+        now = time.time() if now is None else now
+        if self.checked is not None and 0 <= now - self.checked < self.EVERY:
+            return self.value
+        self.checked = now
+        self.value = self._load(now)
+        return self.value
+
+    def _load(self, now):
+        for p in self.paths:
+            try:
+                if not os.path.exists(p):
+                    continue
+                with open(p) as f:
+                    d = json.load(f)
+                t = d.get("t")
+                if not isinstance(t, (int, float)):
+                    t = os.stat(p).st_mtime
+                if now - t > self.STALE:
+                    return None
+                override = bool(d.get("override"))
+                trigger = d.get("trigger")
+                fans = d.get("fans")
+                fan = next(iter(fans.values()), None) if isinstance(fans, dict) else None
+                fan = fan if isinstance(fan, dict) else {}
+                if override != self.override:
+                    if (self.override is not None or override) and self.history:
+                        self.history.event(now, override, trigger)
+                    self.override = override
+                return {"override": override, "trigger": trigger,
+                        "duty": fan.get("duty"), "rpm": fan.get("rpm")}
+            except Exception:
+                return None
+        return None
+
+
 class Telemetry:
-    def __init__(self, interval, amd_peak_bw, coolant=None):
+    def __init__(self, interval, amd_peak_bw, coolant=None, fanctl="auto"):
         self.interval = interval
         self.cpu = CpuSampler(coolant)
         self.gpus = detect_gpus(amd_peak_bw)
         self.baselines = [DisplayBaseline() for _ in self.gpus]
+        self.history = History()
+        self.fan = FanState(fanctl, self.history)
         self.host = socket.gethostname()
         self.latest = None
         self.cond = threading.Condition()
@@ -746,12 +842,18 @@ class Telemetry:
                     gpus.append(subtract_display(gpu.sample(), baseline))
                 except Exception as exc:  # one flaky device should not stop the stream
                     gpus.append({"name": gpu.name, "vendor": gpu.vendor, "error": str(exc)})
+            now = time.time()
+            cpu = self.cpu.sample()
+            fan = self.fan.read(now)
+            self.history.add(now, cpu.get("coolant_temp"), cpu.get("temp"),
+                             gpus[0].get("temp") if gpus else None)
             snapshot = json.dumps({
-                "t": time.time(),
+                "t": now,
                 "interval": self.interval,
                 "host": self.host,
-                "cpu": self.cpu.sample(),
+                "cpu": cpu,
                 "gpus": gpus,
+                "fan": fan,
             })
             with self.cond:
                 self.latest = snapshot
@@ -787,6 +889,8 @@ def make_handler(telemetry):
                 finally:
                     telemetry.attach(-1)
                 self._send(data.encode(), "application/json")
+            elif path == "/history":
+                self._send(json.dumps(telemetry.history.payload()).encode(), "application/json")
             elif path in ("/", "/index.html"):
                 self._send((WEB_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
             else:
@@ -901,6 +1005,8 @@ def main():
                     help="temperature for the dial: coolant if the machine has a sensor (auto, coolant) or the CPU die (cpu)")
     ap.add_argument("--liquidctl", default="auto", metavar="PATH",
                     help="liquidctl executable for AIO coolers without a kernel driver (default: find it on PATH; 'none' disables)")
+    ap.add_argument("--fanctl-state", default="auto", metavar="PATH",
+                    help="fanctl state JSON for the fan field (default: /run/fanctl/state.json or the distrobox host copy; 'none' disables)")
     ap.add_argument("--version", action="version", version=f"PCmeter {__version__}")
     args = ap.parse_args()
 
@@ -917,7 +1023,8 @@ def main():
     def start():
         """Start sampling and serving; returns (telemetry, server, url)."""
         telemetry = Telemetry(args.interval, args.amd_peak_bw,
-                              CoolantSensor(args.temp_source, args.liquidctl))
+                              CoolantSensor(args.temp_source, args.liquidctl),
+                              args.fanctl_state)
         try:
             server = ThreadingHTTPServer((args.host, args.port), make_handler(telemetry))
         except OSError:

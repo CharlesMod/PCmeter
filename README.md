@@ -60,10 +60,16 @@ open `web/index.html` directly from disk.
 | `--amd-peak-bw 960` | Peak VRAM bandwidth in GB/s for AMD cards, so throughput shows in GB/s |
 | `--temp-source auto` | Dial temperature: `auto`/`coolant` use the radiator/coolant sensor when there is one, `cpu` always the die |
 | `--liquidctl PATH` | liquidctl executable for AIO coolers without a kernel driver (default: found on PATH; `none` disables). Only `liquidctl status` is ever run |
+| `--fanctl-state PATH` | fanctl state JSON behind the `fan` field (default: `/run/fanctl/state.json`, then `/run/host/run/fanctl/state.json`; `none` disables). Ignored when older than 15 s or missing |
 | `--port 8765` / `--host` | Where to listen |
 | `--app` / `--app --browser` | Desktop gadgets, or a browser app window |
 
 ## What is measured
+
+- **History**: `GET /history` returns `{"interval": 5, "samples": [[t, coolant, die, gpu0], ...], "events": [{"t", "on", "trigger"}, ...]}`,
+  5-second averages of the last 2 hours (epoch seconds, deg C, `null` when missing; oldest first) and fan-override
+  transitions. It is kept in memory and only fills while a window or stream is open. Every snapshot also carries
+  `fan`: `{"override", "trigger", "duty", "rpm"}` from fanctl's state file, or `null` without fresh state.
 
 - **CPU**: total and per-thread load, clock, temperature (`k10temp`, `coretemp`, ...),
   load average, package power (RAPL; often needs root to read). A coolant/radiator temperature

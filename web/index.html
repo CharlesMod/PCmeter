@@ -383,6 +383,41 @@ body.widget { background: transparent; }
 }
 .led-wrap span { font: 600 8.5px var(--f-ui); letter-spacing: .14em; color: var(--ink-3); }
 
+/* Live / Temps tab on the Processor card */
+.eyebrow-row { display: flex; align-items: baseline; gap: 14px; }
+.tabs { display: flex; gap: 12px; }
+.tabs button, .rng button {
+  appearance: none; background: none; border: 0; border-bottom: 1px solid transparent; padding: 0 0 1px; margin: 0;
+  font: 600 10.5px var(--f-ui); letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); cursor: pointer;
+}
+/* the active tab is bold, not underlined; a hidden bold ghost reserves its width so switching never shifts the row */
+.tabs button { display: inline-flex; flex-direction: column; align-items: center; font-weight: 400; }
+.tabs button::after { content: attr(data-t); font-weight: 700; height: 0; overflow: hidden; visibility: hidden; }
+.tabs button:hover, .rng button:hover { color: var(--ink-2); }
+.tabs button[aria-selected="true"] { color: var(--acc); font-weight: 700; }
+.tabs button:focus-visible, .rng button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+/* both panes share one grid cell, so the card keeps the height of the dial and stats on either tab */
+.stage { display: grid; }
+.stage > * { grid-area: 1 / 1; min-width: 0; }
+.temps { display: grid; gap: 6px; align-content: center; visibility: hidden; }
+.cpu-temps .temps { visibility: visible; }
+.cpu-temps .stage > .instrument { visibility: hidden; }
+.tvals { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 0 0 6px; border-bottom: 1px solid var(--hair); }
+.tvals .vals { font: 400 13.5px var(--f-num); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 0; }
+.tvals .vals small { font: 600 10px var(--f-ui); letter-spacing: .14em; color: var(--ink-3); margin-left: 3px; }
+.tvals .vals i { font-style: normal; color: var(--ink-3); margin: 0 7px; }
+.tvals .vals .liq { color: var(--cpu); }
+.rng { display: flex; gap: 9px; flex: none; }
+.rng button { font-size: 9.5px; letter-spacing: .12em; }
+.rng button { display: inline-flex; flex-direction: column; align-items: center; font-weight: 400; }
+.rng button::after { content: attr(data-t); font-weight: 700; height: 0; overflow: hidden; visibility: hidden; }
+.rng button[aria-pressed="true"] { color: var(--acc); font-weight: 700; }
+.tchart { width: 100%; height: 108px; display: block; }
+.tcap { display: flex; justify-content: space-between; gap: 10px; font-size: 10px; color: var(--ink-3); letter-spacing: .04em; }
+/* the gauges view has no room: Live only */
+.gauge .tabs, .gauge .temps { display: none; }
+.gauge .cpu-temps .stage > .instrument { visibility: visible; }
+
 /* dial + readouts */
 .instrument { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 16px; align-items: center; }
 .dial { width: 176px; height: 176px; display: block; }
@@ -663,7 +698,11 @@ body.gauge .rs { display: none; }
     <section class="card cpu" id="cpu-card" aria-label="CPU">
       <div class="head">
         <div class="id">
-          <div class="eyebrow">Processor</div>
+          <div class="eyebrow-row"><div class="eyebrow">Processor</div>
+            <div class="tabs" role="tablist" aria-label="Processor view">
+              <button type="button" role="tab" id="tab-live" data-t="Live" aria-selected="true">Live</button>
+              <button type="button" role="tab" id="tab-temps" data-t="Temps" aria-selected="false">Temps</button>
+            </div></div>
           <h2 class="clip" id="cpu-name"><span class="run">—</span></h2>
           <div class="sub" id="cpu-sub">—</div>
         </div>
@@ -671,18 +710,28 @@ body.gauge .rs { display: none; }
         <div class="led-wrap" title="Activity: flashes once per count"><div class="led"><i id="cpu-led"></i></div><span>ACT</span></div>
       </div>
 
-      <div class="instrument">
-        <canvas class="dial" id="cpu-dial" role="img" aria-label="CPU load and temperature dial"></canvas>
-        <dl class="readouts">
-          <div class="row"><dt>Clock</dt><dd class="clip" id="cpu-clock"><span class="run">—</span></dd></div>
-          <div class="row"><dt>Package power</dt><dd class="clip" id="cpu-power"><span class="run">—</span></dd></div>
-          <div class="row"><dt title="1, 5 and 15 minute load average">Load avg</dt><dd class="clip" id="cpu-loadavg"><span class="run">—</span></dd></div>
-          <div class="row"><dt>Busiest thread</dt><dd class="clip" id="cpu-busiest"><span class="run">—</span></dd></div>
-          <div class="spark-wrap">
-            <div class="cap"><span>Load, last 60 s</span><span id="cpu-peak">peak —</span></div>
-            <canvas class="spark" id="cpu-spark"></canvas>
+      <div class="stage">
+        <div class="instrument">
+          <canvas class="dial" id="cpu-dial" role="img" aria-label="CPU load and temperature dial"></canvas>
+          <dl class="readouts">
+            <div class="row"><dt>Clock</dt><dd class="clip" id="cpu-clock"><span class="run">—</span></dd></div>
+            <div class="row"><dt>Package power</dt><dd class="clip" id="cpu-power"><span class="run">—</span></dd></div>
+            <div class="row"><dt title="1, 5 and 15 minute load average">Load avg</dt><dd class="clip" id="cpu-loadavg"><span class="run">—</span></dd></div>
+            <div class="row"><dt>Busiest thread</dt><dd class="clip" id="cpu-busiest"><span class="run">—</span></dd></div>
+            <div class="spark-wrap">
+              <div class="cap"><span>Load, last 60 s</span><span id="cpu-peak">peak —</span></div>
+              <canvas class="spark" id="cpu-spark"></canvas>
+            </div>
+          </dl>
+        </div>
+        <div class="temps" id="cpu-temps">
+          <div class="tvals">
+            <div class="vals" id="t-vals">—</div>
+            <div class="rng" id="t-rng"><button type="button" data-t="5m" data-r="300" aria-pressed="false">5m</button><button type="button" data-t="30m" data-r="1800" aria-pressed="true">30m</button><button type="button" data-t="2h" data-r="7200" aria-pressed="false">2h</button></div>
           </div>
-        </dl>
+          <canvas class="tchart" id="cpu-tchart" role="img" aria-label="Coolant, CPU die and GPU temperature history"></canvas>
+          <div class="tcap"><span id="t-cap">Coolant, last 30 min</span><span id="t-max">die max —</span></div>
+        </div>
       </div>
 
       <div class="geiger">
@@ -1305,9 +1354,184 @@ function stepDrift(now) {
   }
 }
 
+/* ---------- Temps tab: coolant, CPU die and GPU temperature history. /history seeds it (up to 2 h, one
+   sample per 5 s); the stream then appends a sample every 5 s. Missing readings stay null and break the line. */
+const TH = { t: [], liq: [], die: [], gpu: [], ev: [], range: 1800, key: '', lastPush: 0, fanOn: undefined, hasFan: false,
+  live: { liq: null, die: null, gpu: null }, seenAt: 0, fetching: false };
+const TH_KEEP = 7200 + 60, TH_STEP = 5, TH_BREAK = 30;
+const SERIES = [['liq', 'Coolant', 'LIQ'], ['die', 'Die', 'die'], ['gpu', 'GPU', 'GPU']];
+const tnum = v => typeof v === 'number' && isFinite(v) ? v : null;
+function tempsOn() { return $('cpu-card').classList.contains('cpu-temps') && !$('deck').classList.contains('gauge'); }
+function tempsTrim() {
+  const lo = TH.t[TH.t.length - 1] - TH_KEEP; let k = 0;
+  while (k < TH.t.length && TH.t[k] < lo) k++;
+  if (k) for (const a of ['t', 'liq', 'die', 'gpu']) TH[a].splice(0, k);
+  if (TH.ev.length > 200) TH.ev.splice(0, TH.ev.length - 200);
+}
+function tempsPush(d) {
+  const now = Date.now() / 1000, c = d.cpu || {}, g = (d.gpus || []).find(x => !x.error) || {};
+  const live = { liq: tnum(c.coolant_temp), die: tnum(c.temp), gpu: tnum(g.temp) };
+  TH.live = live;
+  const fan = d.fan;
+  if (fan && typeof fan === 'object') {
+    TH.hasFan = true;
+    const on = !!fan.override;
+    if (on !== TH.fanOn && (TH.fanOn !== undefined || on)) TH.ev.push({ t: now, on, trigger: fan.trigger });
+    TH.fanOn = on;
+  }
+  if (now - TH.lastPush < TH_STEP - .25) { if (tempsOn()) tempsText(); return; }
+  TH.lastPush = now;
+  TH.t.push(now); TH.liq.push(live.liq); TH.die.push(live.die); TH.gpu.push(live.gpu);
+  tempsTrim();
+  if (tempsOn()) tempsText();
+}
+/* Seed from the backend; samples the stream added since replace nothing older than the fetched tail. */
+async function tempsFetch() {
+  if (TH.fetching || !/^https?:$/.test(location.protocol) || params.has('demo')) return;
+  TH.fetching = true;
+  try {
+    const r = await fetch(`${params.get('src') || ''}/history`, { cache: 'no-store' });
+    if (!r.ok) return;                                   // old backend: stay with what the stream gives
+    const h = await r.json(), rows = Array.isArray(h.samples) ? h.samples : [];
+    const keep = { t: [], liq: [], die: [], gpu: [] }, lastT = rows.length ? rows[rows.length - 1][0] : -Infinity;
+    for (const [t, liq, die, gpu] of rows) { keep.t.push(t); keep.liq.push(tnum(liq)); keep.die.push(tnum(die)); keep.gpu.push(tnum(gpu)); }
+    for (let i = 0; i < TH.t.length; i++) if (TH.t[i] > lastT + TH_STEP / 2) {
+      keep.t.push(TH.t[i]); keep.liq.push(TH.liq[i]); keep.die.push(TH.die[i]); keep.gpu.push(TH.gpu[i]);
+    }
+    Object.assign(TH, keep);
+    const ev = (Array.isArray(h.events) ? h.events : []).filter(e => typeof e.t === 'number').map(e => ({ t: e.t, on: !!e.on, trigger: e.trigger }));
+    if (ev.length || TH.hasFan) { const tail = TH.ev.filter(e => e.t > (ev.length ? ev[ev.length - 1].t : -Infinity) + 1); TH.ev = ev.concat(tail); }
+    if (ev.length) TH.hasFan = true;
+    tempsTrim(); TH.key = '';
+    if (tempsOn()) tempsText();
+  } catch {} finally { TH.fetching = false; }
+}
+/* The window on screen: index of its first sample, the series that have any value in it. */
+function tempsWindow() {
+  const n = TH.t.length - 1; if (n < 0) return null;
+  const tEnd = TH.t[n], tStart = tEnd - TH.range; let i0 = 0;
+  while (i0 < n && TH.t[i0] < tStart) i0++;
+  const has = {};
+  for (const [k] of SERIES) { has[k] = false; for (let i = i0; i <= n; i++) if (TH[k][i] != null) { has[k] = true; break; } }
+  return { n, i0, tEnd, tStart, has, lead: has.liq ? 'liq' : has.die ? 'die' : has.gpu ? 'gpu' : null };
+}
+function tempsText() {
+  const w = tempsWindow(), f = v => v == null ? '—' : Math.round(v) + '°';
+  const lastOf = k => { for (let i = TH.t.length - 1; i >= 0; i--) if (TH[k][i] != null) return TH[k][i]; return null; };
+  const parts = [];
+  if (w) for (const [k, , lbl] of SERIES) if (w.has[k]) parts.push(`<span${k === 'liq' ? ' class="liq"' : ''}>${f(TH.live[k] ?? lastOf(k))}</span><small>${lbl}</small>`);
+  put('t-vals', parts.length ? parts.join('<i>·</i>') : '—', true);
+  const lbl = TH.range === 300 ? '5 min' : TH.range === 1800 ? '30 min' : '2 h';
+  if (!w || !w.lead) { put('t-cap', `Collecting, last ${lbl}`); put('t-max', ''); return; }
+  const arr = TH[w.lead]; let first = null, lastV = null;
+  for (let i = w.i0; i <= w.n; i++) if (arr[i] != null) { if (first == null) first = arr[i]; lastV = arr[i]; }
+  const dl = Math.round(lastV - first);
+  put('t-cap', `${w.lead === 'liq' ? 'Coolant' : w.lead === 'die' ? 'Die' : 'GPU'}, last ${lbl} ${dl === 0 ? '±' : dl > 0 ? '+' : '−'}${Math.abs(dl)}°`);
+  let mx = null; for (let i = w.i0; i <= w.n; i++) if (TH.die[i] != null && (mx == null || TH.die[i] > mx)) mx = TH.die[i];
+  put('t-max', mx == null ? '' : `die max ${Math.round(mx)}°`);
+}
+function drawTemps(canvas) {
+  const s = fit(canvas); if (!s) return;
+  const { ctx, w, h } = s, W8 = tempsWindow(); if (!W8 || !W8.lead) return;
+  const { n, i0, tEnd, tStart, has, lead } = W8;
+  const lPad = 30, rPad = 4, tPad = 4, bPad = 3, W = w - lPad - rPad, H = h - tPad - bPad;
+  const X = t => lPad + (t - tStart) / TH.range * W, Y = v => tPad + H - clamp((v - 20) / 80) * H;
+  if (has.liq) {   // bands are coolant bands: warm 40-50, hot 50+
+    ctx.fillStyle = C.warn(.07); ctx.fillRect(lPad, Y(50), W, Y(40) - Y(50));
+    ctx.fillStyle = C.hot(.09); ctx.fillRect(lPad, Y(100), W, Y(50) - Y(100));
+  }
+  ctx.font = `10px ${T.ui}`; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (const v of [20, 40, 60, 80, 100]) {
+    ctx.strokeStyle = fg(v === 60 ? .06 : .035); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(lPad, Math.round(Y(v)) + .5); ctx.lineTo(w - rPad, Math.round(Y(v)) + .5); ctx.stroke();
+    ctx.fillStyle = C.ink3; ctx.fillText(v + '°', lPad - 5, Y(v) + (v === 100 ? 3 : v === 20 ? -3 : 0));
+  }
+  ctx.save(); ctx.beginPath(); ctx.rect(lPad, 0, W + rPad, h); ctx.clip();
+  // fan override: faint span while on, dashed marker + label at each switch-on
+  const spans = []; let open = null;
+  for (const e of TH.ev) {
+    if (e.on && open == null) open = e.t;
+    else if (!e.on && open != null) { spans.push([open, e.t]); open = null; }
+  }
+  if (open != null) spans.push([open, TH.fanOn === false ? open : Infinity]);
+  ctx.font = `600 9px ${T.ui}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  for (const [a, b] of spans) {
+    const x0 = Math.max(lPad, X(a)), x1 = Math.min(lPad + W, X(Math.min(b, tEnd)));
+    if (x1 > x0) { ctx.fillStyle = fg(.04); ctx.fillRect(x0, tPad, x1 - x0, H); }
+    const fx = X(a);
+    if (fx > lPad && fx < lPad + W) {
+      ctx.strokeStyle = fg(.28); ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(Math.round(fx) + .5, tPad); ctx.lineTo(Math.round(fx) + .5, h - bPad); ctx.stroke(); ctx.setLineDash([]);
+      const lw = ctx.measureText('fans 100%').width;
+      if (fx + 4 + lw > lPad + W) { ctx.textAlign = 'right'; ctx.fillStyle = C.ink3; ctx.fillText('fans 100%', fx - 4, tPad + 1); ctx.textAlign = 'left'; }
+      else { ctx.fillStyle = C.ink3; ctx.fillText('fans 100%', Math.max(lPad + 2, fx + 4), tPad + 1); }
+    }
+  }
+  // runs of consecutive readings; a null or a long hole in the data ends a run
+  const runs = k => {
+    const out = []; let cur = [];
+    for (let i = i0 > 0 ? i0 - 1 : 0; i <= n; i++) {
+      const v = TH[k][i];
+      if (v == null || (cur.length && TH.t[i] - TH.t[i - 1] > TH_BREAK)) { if (cur.length) out.push(cur); cur = []; }
+      if (v != null) cur.push([X(TH.t[i]), Y(v)]);
+    }
+    if (cur.length) out.push(cur);
+    return out;
+  };
+  const stroke = (k, style, width, dash, area) => {
+    ctx.strokeStyle = style; ctx.lineWidth = width; ctx.setLineDash(dash);
+    let end = null;
+    for (const p of runs(k)) {
+      if (p.length === 1) { ctx.beginPath(); ctx.arc(p[0][0], p[0][1], width / 2 + .4, 0, Math.PI * 2); ctx.fillStyle = style; ctx.fill(); end = p[0]; continue; }
+      const line = new Path2D(); curve(line, p); ctx.stroke(line); end = p[p.length - 1];
+      if (area) {
+        const a = new Path2D(line); a.lineTo(p[p.length - 1][0], h); a.lineTo(p[0][0], h); a.closePath();
+        const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, ACC.cpu(.22)); g.addColorStop(1, ACC.cpu(0));
+        ctx.fillStyle = g; ctx.fill(a);
+      }
+    }
+    ctx.setLineDash([]); return end;
+  };
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  if (has.gpu && lead !== 'gpu') stroke('gpu', ACC.gpu(.8), 1, [1, 3]);
+  if (has.die && lead !== 'die') stroke('die', fg(.55), 1, [4, 3]);
+  const e = stroke(lead, lead === 'gpu' ? ACC.gpu(.95) : ACC.cpu(.95), 1.75, [], true);
+  if (e) {
+    ctx.shadowColor = ACC.cpu(1); ctx.shadowBlur = LITE ? 0 : 8 * T.glow;
+    ctx.beginPath(); ctx.arc(e[0], e[1], 2.4, 0, Math.PI * 2); ctx.fillStyle = T.needle; ctx.fill();
+  }
+  ctx.restore();
+}
+function setCpuTab(name) {
+  const t = name === 'temps';
+  $('cpu-card').classList.toggle('cpu-temps', t);
+  $('tab-live').setAttribute('aria-selected', String(!t)); $('tab-temps').setAttribute('aria-selected', String(t));
+  try { localStorage.setItem('pcmeter.cpuTab', t ? 'temps' : 'live'); } catch {}
+  TH.key = ''; stale.add($('cpu-tchart'));
+  if (t) { tempsShown(); tempsText(); }
+}
+/* Opened again after more than a minute out of sight: the stream may have missed samples, so reload the history. */
+function tempsShown() {
+  const now = Date.now() / 1000;
+  if (TH.seenAt && now - TH.seenAt > 60) tempsFetch();
+  TH.seenAt = now;
+}
+$('tab-live').addEventListener('click', () => setCpuTab('live'));
+$('tab-temps').addEventListener('click', () => setCpuTab('temps'));
+document.addEventListener('visibilitychange', () => { if (!document.hidden && tempsOn()) { tempsShown(); tempsText(); } });
+for (const b of document.querySelectorAll('#t-rng button')) b.addEventListener('click', () => {
+  TH.range = +b.dataset.r; TH.key = '';
+  document.querySelectorAll('#t-rng button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  tempsText();
+});
+try { if (localStorage.getItem('pcmeter.cpuTab') === 'temps') setCpuTab('temps'); } catch {}
+tempsFetch();
+
+
 /* New data: update targets and history now; the DOM only while the page is visible. */
 function ingest(d) {
   lastData = d;
+  tempsPush(d);
   sampleAt = performance.now(); sampleMs = (d.interval || .5) * 1000;
   const c = d.cpu;
   if (c) {
@@ -1478,6 +1702,11 @@ function frame(t) {
     if (spec.drawnAt === f && spec.drawnLen === spec.data.length && !stale.has(canvas)) continue;   // at rest until the next sample
     stale.delete(canvas); spec.drawnAt = f; spec.drawnLen = spec.data.length;
     drawSpark(canvas, spec, f);
+  }
+  if (tempsOn()) {
+    const tc = $('cpu-tchart'), k = `${TH.t.length}|${TH.range}|${TH.ev.length}|${TH.fanOn}`;
+    if (!document.hidden) TH.seenAt = Date.now() / 1000;
+    if (k !== TH.key || stale.has(tc)) { TH.key = k; stale.delete(tc); drawTemps(tc); }
   }
   if (toFit.size) fitClips();
   if (LITE) { stepBars(dt); stepDrift(now); }
