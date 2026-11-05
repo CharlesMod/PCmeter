@@ -38,7 +38,7 @@ try:
 except ImportError:
     pynvml = None
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 # A PyInstaller build unpacks the web UI next to the code in sys._MEIPASS.
 WEB_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "web"
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -187,9 +187,14 @@ class LiquidctlPoller:
     BACKOFF_PERIOD = 60.0
     BACKOFF_AFTER = 5   # consecutive failures before slowing down
 
-    def __init__(self, path, clock=time.monotonic):
+    GIVE_UP_AFTER = 3   # auto-detected only: consecutive failures before the first good reading end the polling
+
+    def __init__(self, path, clock=time.monotonic, give_up=False):
         self.path = path
         self.clock = clock
+        self.give_up = give_up
+        self.ever_ok = False
+        self.stopped = False
         self.value = None       # (temp, description, timestamp)
         self.failures = 0
         self.timeout = 5.0
@@ -205,8 +210,12 @@ class LiquidctlPoller:
             self.failures += 1
             if self.failures == 1:
                 print(f"pcmeter: liquidctl status failed: {exc}", file=sys.stderr)
+            if self.give_up and not self.ever_ok and self.failures >= self.GIVE_UP_AFTER:
+                self.stopped = True     # no liquid-cooled device here (e.g. an AIO without a coolant sensor)
+                print("pcmeter: liquidctl found no liquid temperature; not polling it any more", file=sys.stderr)
             return False
         self.failures = 0
+        self.ever_ok = True
         self.value = (parsed[0], parsed[1], self.clock())
         return True
 
@@ -214,8 +223,10 @@ class LiquidctlPoller:
         return self.BACKOFF_PERIOD if self.failures >= self.BACKOFF_AFTER else self.PERIOD
 
     def run(self):
-        while True:
+        while not self.stopped:
             self.poll_once()
+            if self.stopped:
+                break
             time.sleep(self.delay())
 
     def start(self):
@@ -302,7 +313,7 @@ class CoolantSensor:
             path = None if liquidctl == "none" else (liquidctl if liquidctl != "auto" else shutil.which("liquidctl"))
             owned = self.fanctl is not None and self.fanctl.present()    # fanctl polls the loop: no second client
             if path and not self.file and not owned and (liquidctl != "auto" or os.path.exists(path)):
-                self.poller = LiquidctlPoller(path, clock)
+                self.poller = LiquidctlPoller(path, clock, give_up=liquidctl == "auto")
                 if start_thread:
                     self.poller.start()
 
@@ -1050,6 +1061,19 @@ class FanState:
         self.value = self._load(now)
         return self.value
 
+    @staticmethod
+    def pick_fans(fans):
+        """(radiator, pump) dicts from fanctl's `fans`, by name. Old states had one unnamed-by-role fan: with no
+        "radiator" key, the first fan that is not the pump counts as the radiator."""
+        if not isinstance(fans, dict):
+            return {}, {}
+        fans = {str(k): v for k, v in fans.items() if isinstance(v, dict)}
+        pump = fans.get("pump", {})
+        radiator = fans.get("radiator")
+        if radiator is None:
+            radiator = next((v for k, v in fans.items() if k != "pump"), {})
+        return radiator, pump
+
     def _load(self, now):
         for p in self.paths:
             try:
@@ -1064,15 +1088,18 @@ class FanState:
                     return None
                 override = bool(d.get("override"))
                 trigger = d.get("trigger")
-                fans = d.get("fans")
-                fan = next(iter(fans.values()), None) if isinstance(fans, dict) else None
-                fan = fan if isinstance(fan, dict) else {}
+                trigger = trigger if isinstance(trigger, str) else None
+                radiator, pump = self.pick_fans(d.get("fans"))
                 if override != self.override:
                     if (self.override is not None or override) and self.history:
                         self.history.event(now, override, trigger)
                     self.override = override
+                # "duty" / "rpm" stay the radiator's, so clients of the single-fan shape keep working.
                 return {"override": override, "trigger": trigger,
-                        "duty": fan.get("duty"), "rpm": fan.get("rpm")}
+                        "duty": radiator.get("duty"), "rpm": radiator.get("rpm"),
+                        "radiator": {"duty": radiator.get("duty"), "rpm": radiator.get("rpm")} if radiator else None,
+                        "pump": ({"duty": pump.get("duty"), "rpm": pump.get("rpm"),
+                                  "stalled": bool(pump.get("stalled"))} if pump else None)}
             except Exception:
                 return None
         return None

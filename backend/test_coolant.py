@@ -94,6 +94,22 @@ class Liquidctl(unittest.TestCase):
         self.assertEqual(p.latest(), (None, None))
         self.assertEqual(p.delay(), 60.0)
 
+    def test_auto_poller_gives_up_without_a_device(self):
+        p = pm.LiquidctlPoller(self.script("exit 1\n"), give_up=True)
+        for _ in range(pm.LiquidctlPoller.GIVE_UP_AFTER):
+            self.assertFalse(p.stopped)
+            p.poll_once()
+        self.assertTrue(p.stopped)
+        p.run()                                  # returns at once instead of looping forever
+
+    def test_auto_poller_keeps_going_once_it_has_worked(self):
+        p = pm.LiquidctlPoller(self.script(f"echo '{JSON}'\n"), give_up=True)
+        self.assertTrue(p.poll_once())
+        p.path = "/nonexistent/liquidctl"
+        for _ in range(10):
+            p.poll_once()
+        self.assertFalse(p.stopped)
+
     def test_missing_binary(self):
         p = pm.LiquidctlPoller("/nonexistent/liquidctl")
         self.assertFalse(p.poll_once())
@@ -186,6 +202,18 @@ class FanctlState(unittest.TestCase):
         self.assertEqual(s.read(), (41.25, "fanctl"))
         self.now = 1040.0                       # 44 s old now
         self.assertEqual(s.read(), (None, None))
+
+    def test_no_coolant_in_new_state_falls_back_to_cpu(self):
+        # Arctic Liquid Freezer III Pro: fanctl state without inputs.coolant
+        self.write('{"t": 995.0, "override": false, "trigger": null, "fans": {}, '
+                   '"inputs": {"cpu": 61.2, "power": 88.0, "gpu": 40.1, "nvme": 47.9}}')
+        s = pm.CoolantSensor(hwmon_root=self.tmp.name + "/none", system="Linux", liquidctl="/bin/true",
+                             fanctl=self.state, start_thread=False, wall=lambda: self.now)
+        self.assertIsNone(s.poller)             # fanctl owns the loop: no liquidctl polling for a missing sensor
+        f = s.fields()
+        self.assertIsNone(f["coolant_temp"])
+        self.assertIsNone(f["coolant_source"])
+        self.assertEqual(f["temp_source"], "cpu")
 
     def test_no_second_liquidctl_client(self):
         self.write('{"t": 995.0, "inputs": {"coolant": 40.5}}')

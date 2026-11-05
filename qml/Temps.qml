@@ -13,6 +13,7 @@ Item {
     required property var feed
     property bool shown: false
     property var live: ({ liq: null, die: null, gpu: null })     // the latest readings (set by the card)
+    property var fanTrigger: null       // why the override is on ("pump" = a stalled pump)
     property var fanOn: undefined                                // true / false once the sampler reports a fan state
     property real histT: 0                                       // the newest history row's time; a change reloads
     property int range: host.trange
@@ -232,13 +233,13 @@ Item {
                         var X = function (t) { return (t - (tEnd - R)) / R * W + step }
                         var Y = plot.yOf
                         ctx.font = "600 9px '" + sk.ui + "'"; ctx.textAlign = "left"; ctx.textBaseline = "top"
-                        var spans = [], open = null, e, q
+                        var spans = [], open = null, openTrig = null, e, q
                         for (q = 0; q < tp.ev.length; q++) {
                             e = tp.ev[q]
-                            if (e.on && open === null) open = e.t
-                            else if (!e.on && open !== null) { spans.push([open, e.t]); open = null }
+                            if (e.on && open === null) { open = e.t; openTrig = e.trigger }
+                            else if (!e.on && open !== null) { spans.push([open, e.t, openTrig]); open = null }
                         }
-                        if (open !== null) spans.push([open, tp.fanOn === false ? open : Infinity])
+                        if (open !== null) spans.push([open, tp.fanOn === false ? open : Infinity, openTrig || tp.fanTrigger])
                         for (q = 0; q < spans.length; q++) {
                             var a = spans[q][0], b = spans[q][1]
                             var x0 = Math.max(0, X(a)), x1 = Math.min(W + step, X(Math.min(b, tEnd)))
@@ -247,10 +248,11 @@ Item {
                             if (fx > 0 && fx < W + step) {
                                 ctx.strokeStyle = fg(.28); ctx.lineWidth = 1; ctx.setLineDash([3, 3])
                                 ctx.beginPath(); ctx.moveTo(Math.round(fx) + .5, tPad); ctx.lineTo(Math.round(fx) + .5, h - bPad); ctx.stroke(); ctx.setLineDash([])
-                                var lw = ctx.measureText("fans 100%").width
+                                var fl = spans[q][2] === "pump" ? "fans 100% · pump stall" : "fans 100%"
+                                var lw = ctx.measureText(fl).width
                                 ctx.fillStyle = Skins.css(sk.ink3)
-                                if (fx + 4 + lw > W) { ctx.textAlign = "right"; ctx.fillText("fans 100%", fx - 4, tPad + 1); ctx.textAlign = "left" }
-                                else ctx.fillText("fans 100%", Math.max(2, fx + 4), tPad + 1)
+                                if (fx + 4 + lw > W) { ctx.textAlign = "right"; ctx.fillText(fl, fx - 4, tPad + 1); ctx.textAlign = "left" }
+                                else ctx.fillText(fl, Math.max(2, fx + 4), tPad + 1)
                             }
                         }
                         var runs = function (k) {          // a null or a long hole in the data ends a run

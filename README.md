@@ -80,12 +80,17 @@ open `web/index.html` directly from disk.
 - **History**: `GET /history` returns `{"interval": 5, "samples": [[t, coolant, die, gpu0], ...], "events": [{"t", "on", "trigger"}, ...]}`,
   5-second averages of the last 2 hours (epoch seconds, deg C, `null` when missing; oldest first) and fan-override
   transitions. It is kept in memory and only fills while a window or stream is open. Every snapshot also carries
-  `fan`: `{"override", "trigger", "duty", "rpm"}` from fanctl's state file, or `null` without fresh state.
+  `fan` from fanctl's state file, or `null` without fresh state: `{"override", "trigger", "duty", "rpm", "radiator": {"duty", "rpm"}, "pump": {"duty", "rpm", "stalled"}}`.
+  Fans are read by name (`radiator`, `pump`); `duty`/`rpm` stay the radiator's, and an older state with a single fan of any
+  name still works (`pump` is then `null`). The CPU card shows `Radiator 1,710 rpm · 52 %` and `Pump 1,820 rpm`; a stalled
+  pump reads `PUMP STALL` in red, and the Temps chart labels an override `fans 100% · pump stall` when `trigger` is `pump`.
 
 - **CPU**: total and per-thread load, clock, temperature (`k10temp`, `coretemp`, ...),
   load average, package power (RAPL; often needs root to read). A coolant/radiator temperature
   (hwmon: Kraken, D5 Next, Aquacomputer, ...; else `liquidctl status`) is reported as
-  `coolant_temp` and preferred for the dial when present.
+  `coolant_temp` and preferred for the dial when present. An AIO with no coolant sensor (e.g. Arctic Liquid Freezer III Pro)
+  just leaves it `null`: the dial shows the die, no coolant labels appear, and an auto-detected `liquidctl` that finds no
+  liquid temperature stops polling after a few tries.
 - **The dial** shows how close the chip is to whichever limit it meets first, the largest of up to three
   terms, each 0-100 %: POWER (package watts / PL1 from `intel-rapl` `constraint_*_power_limit_uw`; watts from RAPL,
   else fanctl's `inputs.power`), THERMAL ((die - 40 C) / (TjMax - 40 C), TjMax from hwmon `temp*_crit`, else 100 C; 40 C

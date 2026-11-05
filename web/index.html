@@ -431,6 +431,8 @@ body.widget { background: transparent; }
 .row dd {
   margin: 0; font: 400 13.5px var(--f-num); font-variant-numeric: tabular-nums;
 }
+.row[hidden] { display: none; }
+.row dd.stall { color: var(--hot); font-weight: 700; letter-spacing: .06em; }
 .row dd small, .num small { font-family: var(--f-ui); font-size: 10.5px; color: var(--ink-3); margin-left: 3px; }
 .spark-wrap { padding-top: 8px; display: grid; gap: 3px; }
 .spark-wrap .cap { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); letter-spacing: .04em; }
@@ -716,6 +718,8 @@ body.gauge .rs { display: none; }
           <dl class="readouts">
             <div class="row"><dt>Clock</dt><dd class="clip" id="cpu-clock"><span class="run">—</span></dd></div>
             <div class="row"><dt>Package power</dt><dd class="clip" id="cpu-power"><span class="run">—</span></dd></div>
+            <div class="row" id="cpu-rad-row" hidden><dt title="Radiator fans, from fanctl">Radiator</dt><dd class="clip" id="cpu-rad"><span class="run">—</span></dd></div>
+            <div class="row" id="cpu-pump-row" hidden><dt title="Pump speed, from fanctl">Pump</dt><dd class="clip" id="cpu-pump"><span class="run">—</span></dd></div>
             <div class="row"><dt title="Raw CPU utilisation; the dial shows whichever limit is closest">Utilisation</dt><dd class="clip" id="cpu-loadavg"><span class="run">—</span></dd></div>
             <div class="row"><dt>Busiest thread</dt><dd class="clip" id="cpu-busiest"><span class="run">—</span></dd></div>
             <div class="spark-wrap">
@@ -729,8 +733,8 @@ body.gauge .rs { display: none; }
             <div class="vals" id="t-vals">—</div>
             <div class="rng" id="t-rng"><button type="button" data-t="1m" data-r="60" aria-pressed="false">1m</button><button type="button" data-t="5m" data-r="300" aria-pressed="false">5m</button><button type="button" data-t="30m" data-r="1800" aria-pressed="true">30m</button><button type="button" data-t="2h" data-r="7200" aria-pressed="false">2h</button></div>
           </div>
-          <canvas class="tchart" id="cpu-tchart" role="img" aria-label="Coolant, CPU die and GPU temperature history"></canvas>
-          <div class="tcap"><span id="t-cap">Coolant, last 30 min</span><span id="t-max">die max —</span></div>
+          <canvas class="tchart" id="cpu-tchart" role="img" aria-label="CPU die, GPU and coolant temperature history"></canvas>
+          <div class="tcap"><span id="t-cap">Die, last 30 min</span><span id="t-max">die max —</span></div>
         </div>
       </div>
 
@@ -1298,6 +1302,7 @@ function rate(gbps) {
 const rateText = gbps => { const r = rate(gbps); return `${r.v} ${r.u}`; };
 /* 1, 2 or 5 times a power of ten, at or above v */
 function niceCeil(v) { const e = Math.pow(10, Math.floor(Math.log10(v))); return [1, 2, 5, 10].map(m => m * e).find(x => x >= v - 1e-12); }
+const thou = v => Math.round(v).toLocaleString('en-US');
 const unit = (v, u, d = 0) => v == null ? '—' : `${fmt(v, d)}<small>${u}</small>`;
 const push = (arr, v) => { arr.push(v); if (arr.length > 120) arr.shift(); };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1389,7 +1394,7 @@ function tempsPush(d) {
     TH.hasFan = true;
     const on = !!fan.override;
     if (on !== TH.fanOn && (TH.fanOn !== undefined || on)) TH.ev.push({ t: now, on, trigger: fan.trigger });
-    TH.fanOn = on;
+    TH.fanOn = on; TH.fanTrigger = on ? fan.trigger : null;
   }
   if (now - TH.lastPush < TH_STEP - .25) { if (tempsOn()) tempsText(); return; }
   TH.lastPush = now;
@@ -1468,23 +1473,24 @@ function drawTemps(canvas) {
   }
   ctx.save(); ctx.beginPath(); ctx.rect(lPad, 0, W + rPad, h); ctx.clip();
   // fan override: faint span while on, dashed marker + label at each switch-on
-  const spans = []; let open = null;
+  const spans = []; let open = null, openTrig = null;
   for (const e of TH.ev) {
-    if (e.on && open == null) open = e.t;
-    else if (!e.on && open != null) { spans.push([open, e.t]); open = null; }
+    if (e.on && open == null) { open = e.t; openTrig = e.trigger; }
+    else if (!e.on && open != null) { spans.push([open, e.t, openTrig]); open = null; }
   }
-  if (open != null) spans.push([open, TH.fanOn === false ? open : Infinity]);
+  if (open != null) spans.push([open, TH.fanOn === false ? open : Infinity, openTrig ?? TH.fanTrigger]);
   ctx.font = `600 9px ${T.ui}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  for (const [a, b] of spans) {
+  for (const [a, b, trig] of spans) {
+    const label = trig === 'pump' ? 'fans 100% · pump stall' : 'fans 100%';
     const x0 = Math.max(lPad, X(a)), x1 = Math.min(lPad + W, X(Math.min(b, tEnd)));
     if (x1 > x0) { ctx.fillStyle = fg(.04); ctx.fillRect(x0, tPad, x1 - x0, H); }
     const fx = X(a);
     if (fx > lPad && fx < lPad + W) {
       ctx.strokeStyle = fg(.28); ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
       ctx.beginPath(); ctx.moveTo(Math.round(fx) + .5, tPad); ctx.lineTo(Math.round(fx) + .5, h - bPad); ctx.stroke(); ctx.setLineDash([]);
-      const lw = ctx.measureText('fans 100%').width;
-      if (fx + 4 + lw > lPad + W) { ctx.textAlign = 'right'; ctx.fillStyle = C.ink3; ctx.fillText('fans 100%', fx - 4, tPad + 1); ctx.textAlign = 'left'; }
-      else { ctx.fillStyle = C.ink3; ctx.fillText('fans 100%', Math.max(lPad + 2, fx + 4), tPad + 1); }
+      const lw = ctx.measureText(label).width;
+      if (fx + 4 + lw > lPad + W) { ctx.textAlign = 'right'; ctx.fillStyle = C.ink3; ctx.fillText(label, fx - 4, tPad + 1); ctx.textAlign = 'left'; }
+      else { ctx.fillStyle = C.ink3; ctx.fillText(label, Math.max(lPad + 2, fx + 4), tPad + 1); }
     }
   }
   // runs of consecutive readings; a null or a long hole in the data ends a run
@@ -1599,6 +1605,21 @@ function ingest(d) {
   if (!document.hidden) render();
 }
 
+/* Cooling readouts from fanctl's state (snapshot `fan`): hidden without fresh state or without that part. */
+function renderCooling(fan) {
+  const rad = fan && (fan.radiator || (fan.rpm != null || fan.duty != null ? { rpm: fan.rpm, duty: fan.duty } : null));
+  const pump = fan && fan.pump;
+  const radOk = !!rad && (rad.rpm != null || rad.duty != null);
+  $('cpu-rad-row').hidden = !radOk;
+  $('cpu-pump-row').hidden = !pump;
+  if (radOk) put('cpu-rad', [rad.rpm == null ? '' : `${thou(rad.rpm)}<small>rpm</small>`, rad.duty == null ? '' : `${fmt(rad.duty)}<small>%</small>`].filter(Boolean).join(' · '), true);
+  if (pump) {
+    const dd = $('cpu-pump'), st = !!pump.stalled;
+    dd.classList.toggle('stall', st);
+    put('cpu-pump', st ? 'PUMP STALL' : pump.rpm == null ? '—' : `${thou(pump.rpm)}<small>rpm</small>`, true);
+  }
+}
+
 function render() {
   const d = lastData;
   if (!d) return;
@@ -1610,6 +1631,7 @@ function render() {
     put('cpu-clock', c.freq_mhz ? unit(c.freq_mhz / 1000, 'GHz', 2) : '—', true);
     put('cpu-power', c.power_w == null ? '—' : `${fmt(c.power_w, 1)}<small>${c.limit?.power_limit_w ? `/ ${fmt(c.limit.power_limit_w, 0)} W` : 'W'}</small>`, true);
     put('cpu-loadavg', unit(c.util, '%', 0), true);
+    renderCooling(d.fan);
     const pc = c.per_core || [];
     if (pc.length) {
       let bi = 0; pc.forEach((v, i) => { if (v > pc[bi]) bi = i; });
@@ -1855,6 +1877,8 @@ function demo() {
         power_w: 32 + 195 * Math.pow(util, 1.1), load: la, procs: cpuProcs(util),
         limit: demoLimit(util * 100, temp, 32 + 195 * Math.pow(util, 1.1), 120, 100),
       },
+      fan: { override: false, trigger: null, duty: Math.round(35 + util * 40), rpm: Math.round(1370 + util * 800),
+             radiator: { duty: Math.round(35 + util * 40), rpm: Math.round(1370 + util * 800) }, pump: { duty: null, rpm: 1800 + Math.round(rnd(-20, 20)), stalled: false } },
       gpus: [{
         name: 'NVIDIA GeForce RTX 4080', vendor: 'NVIDIA', util: gu * 100, mem_util: mu * 100, temp: gtemp,
         clock_mhz: gu < .08 ? rnd(210, 420) : 2715 - gu * 180 + rnd(-15, 15),

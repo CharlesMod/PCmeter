@@ -15,6 +15,8 @@ Item {
     property int glide: 450
     property real frac: 0
     property bool last: false
+    property var valueColor: undefined   // overrides the value's ink (a warning)
+    property bool bold: false
     implicitHeight: 14 + Math.max(lbl.implicitHeight, val.implicitHeight) + (meter ? 8 : 0)
 
     Text {
@@ -26,8 +28,8 @@ Item {
         id: val
         y: 7; anchors.right: parent.right; layoutDirection: Qt.LeftToRight; spacing: 3
         Text {
-            text: row.value; font.pixelSize: 14; font.family: row.sk ? row.sk.num : ""
-            color: row.sk ? Skins.qt(row.sk.ink) : "white"
+            text: row.value; font.pixelSize: 14; font.family: row.sk ? row.sk.num : ""; font.bold: row.bold
+            color: row.valueColor !== undefined ? row.valueColor : (row.sk ? Skins.qt(row.sk.ink) : "white")
         }
         Text {
             visible: row.unit !== ""; anchors.baseline: parent.children[0].baseline

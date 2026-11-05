@@ -62,11 +62,47 @@ class Fan(unittest.TestCase):
         with open(self.path, "w") as f:
             json.dump(d, f)
 
-    def test_reads_first_fan(self):
+    def test_old_single_fan_shape(self):
+        # fanctl before the Arctic AIO: one fan of any name; it counts as the radiator, there is no pump
         self.write(t=100, override=True, trigger="coolant",
                    fans={"a": {"duty": 80, "rpm": 1200}, "b": {"duty": 1, "rpm": 2}})
         f = pm.FanState(self.path, self.h)
-        self.assertEqual(f.read(101), {"override": True, "trigger": "coolant", "duty": 80, "rpm": 1200})
+        self.assertEqual(f.read(101), {"override": True, "trigger": "coolant", "duty": 80, "rpm": 1200,
+                                       "radiator": {"duty": 80, "rpm": 1200}, "pump": None})
+
+    def test_new_shape_by_name(self):
+        # the pump listed first must not be taken for the radiator
+        self.write(t=100, override=False, trigger=None,
+                   fans={"pump": {"duty": None, "rpm": 1820, "watch": True, "stalled": False},
+                         "radiator": {"duty": 52, "rpm": 1710}},
+                   inputs={"cpu": 61.2, "power": 88.0, "gpu": 40.1, "nvme": 47.9})
+        v = pm.FanState(self.path, self.h).read(101)
+        self.assertEqual(v["radiator"], {"duty": 52, "rpm": 1710})
+        self.assertEqual((v["duty"], v["rpm"]), (52, 1710))           # old "fan" key = the radiator
+        self.assertEqual(v["pump"], {"duty": None, "rpm": 1820, "stalled": False})
+        self.assertFalse(v["override"])
+
+    def test_pump_stall(self):
+        self.write(t=100, override=True, trigger="pump",
+                   fans={"radiator": {"duty": 100, "rpm": 2200},
+                         "pump": {"duty": None, "rpm": 0, "watch": True, "stalled": True}})
+        f = pm.FanState(self.path, self.h)
+        v = f.read(101)
+        self.assertTrue(v["pump"]["stalled"])
+        self.assertEqual(v["trigger"], "pump")
+        self.assertEqual(self.h.events[0]["trigger"], "pump")
+
+    def test_pump_only_or_odd_fans(self):
+        self.write(t=100, override=False, trigger=None, fans={"pump": {"rpm": 1800}})
+        v = pm.FanState(self.path, self.h).read(101)
+        self.assertIsNone(v["radiator"])
+        self.assertIsNone(v["duty"])
+        self.assertEqual(v["pump"]["rpm"], 1800)
+        self.write(t=100, override=False, trigger=7, fans={"radiator": "x", "pump": 3})
+        v = pm.FanState(self.path, self.h).read(101)
+        self.assertIsNone(v["trigger"])
+        self.assertIsNone(v["radiator"])
+        self.assertIsNone(v["pump"])
 
     def test_stale_missing_none(self):
         self.write(t=100, override=False, trigger=None, fans={})

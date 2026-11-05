@@ -6,6 +6,7 @@ function clamp(v, a, b) { a = a === undefined ? 0 : a; b = b === undefined ? 1 :
 function temp(v) { return v === null || v === undefined || isNaN(v) ? "—" : Number(v).toFixed(1) + "°" }
 // A signed change to one decimal: "+1.2°", "−0.4°", "±0.0°".
 function dtemp(d) { var r = Math.round(d * 10) / 10; return (r === 0 ? "±" : r > 0 ? "+" : "−") + Math.abs(r).toFixed(1) + "°" }
+function thou(v) { return v === null || v === undefined || isNaN(v) ? "—" : String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ",") }
 function fmt(v, d) { return v === null || v === undefined || isNaN(v) ? "—" : Number(v).toFixed(d || 0) }
 
 // A byte rate (given in GB/s) in the unit that reads best: MB/s below 1 GB/s, GB/s from there up.

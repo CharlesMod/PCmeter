@@ -59,6 +59,14 @@ Item {
     readonly property var zones: isCpu ? (liq ? [40, 50] : [70, 85]) : [70, 83]
     property var live: ({ liq: null, die: null, gpu: null })
     property var fanOn: undefined
+    property var fanTrigger: null
+    // Cooling readouts (CPU card) from fanctl's state: the radiator fans and the pump, hidden without them.
+    property bool radOn: false
+    property string radValue: "—"
+    property string radUnit: ""
+    property bool pumpOn: false
+    property bool pumpStalled: false
+    property string pumpValue: "—"
     property real histT: 0
     readonly property bool temps: isCpu && !gauge && host.tab === "temps"
 
@@ -88,6 +96,16 @@ Item {
             live = { liq: typeof c.coolant_temp === "number" ? c.coolant_temp : null, die: typeof c.temp === "number" ? c.temp : null,
                      gpu: g0 && typeof g0.temp === "number" ? g0.temp : null }
             fanOn = d.fan && typeof d.fan === "object" ? !!d.fan.override : undefined
+            fanTrigger = d.fan && fanOn ? (d.fan.trigger || null) : null
+            var rad = d.fan ? (d.fan.radiator || ((d.fan.rpm !== null && d.fan.rpm !== undefined) || (d.fan.duty !== null && d.fan.duty !== undefined) ? d.fan : null)) : null
+            var hasRpm = rad && rad.rpm !== null && rad.rpm !== undefined, hasDuty = rad && rad.duty !== null && rad.duty !== undefined
+            radOn = !!(hasRpm || hasDuty)
+            radValue = hasRpm ? F.thou(rad.rpm) : F.fmt(rad ? rad.duty : null)
+            radUnit = (hasRpm ? "rpm" : "%") + (hasRpm && hasDuty ? " · " + F.fmt(rad.duty) + "%" : "")
+            var pump = d.fan ? d.fan.pump : null
+            pumpOn = !!pump && typeof pump === "object"
+            pumpStalled = pumpOn && !!pump.stalled
+            pumpValue = pumpOn && !pumpStalled ? F.thou(pump.rpm) : "—"
             histT = host.trange <= 120 ? (d.t || 0) : (d.hist_t || 0)
             var lm = c.limit || {}
             limitTerm = lm.term || "LOAD"; throttled = !!lm.throttled
@@ -306,6 +324,12 @@ Item {
                     spacing: 0
                     ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Clock" : "Core clock"; value: root.rows.a ? root.rows.a[0] : "—"; unit: root.rows.a ? root.rows.a[1] : "" }
                     ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Package power" : "Board power"; value: root.rows.b ? root.rows.b[0] : "—"; unit: root.rows.b ? root.rows.b[1] : "" }
+                    ReadRow { visible: root.isCpu && root.radOn; width: parent.width; sk: root.sk; acc: root.acc; label: "Radiator"; value: root.radValue; unit: root.radUnit }
+                    ReadRow {
+                        visible: root.isCpu && root.pumpOn; width: parent.width; sk: root.sk; acc: root.acc; label: "Pump"
+                        value: root.pumpStalled ? "PUMP STALL" : root.pumpValue; unit: root.pumpStalled ? "" : (root.pumpValue === "—" ? "" : "rpm")
+                        bold: root.pumpStalled; valueColor: root.pumpStalled ? Skins.qt(root.sk.hot) : undefined
+                    }
                     ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Utilisation" : "Fan"; value: root.rows.c ? root.rows.c[0] : "—"; unit: root.rows.c ? root.rows.c[1] : "" }
                     ReadRow {
                         width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Busiest thread" : "VRAM"
@@ -323,7 +347,7 @@ Item {
             Temps {
                 visible: root.temps; anchors.fill: parent
                 sk: root.sk; acc: root.acc; host: root.host; feed: root.feed
-                shown: root.temps; live: root.live; fanOn: root.fanOn; histT: root.histT
+                shown: root.temps; live: root.live; fanOn: root.fanOn; fanTrigger: root.fanTrigger; histT: root.histT
             }
         }
         Text {
