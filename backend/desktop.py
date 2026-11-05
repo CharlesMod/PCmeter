@@ -137,7 +137,7 @@ class Feed(QObject):
         snap = dict(snap)                          # the dial's smoothed load rides along as util_avg
         cpu = snap.get("cpu")
         if cpu and cpu.get("util") is not None:
-            snap["cpu"] = cpu = dict(cpu, util_avg=self._smooth("cpu", self._dial_value(cpu), now))
+            snap["cpu"] = cpu = dict(cpu, util_avg=self._smooth("cpu", cpu["util"], now))
         gpus = snap.get("gpus")
         if gpus:
             snap["gpus"] = [dict(g, util_avg=self._smooth("gpu%d" % i, self._dial_value(g), now))

@@ -720,7 +720,7 @@ body.gauge .rs { display: none; }
             <div class="row"><dt>Package power</dt><dd class="clip" id="cpu-power"><span class="run">—</span></dd></div>
             <div class="row" id="cpu-rad-row" hidden><dt title="Radiator fans, from fanctl">Radiator</dt><dd class="clip" id="cpu-rad"><span class="run">—</span></dd></div>
             <div class="row" id="cpu-pump-row" hidden><dt title="Pump speed, from fanctl">Pump</dt><dd class="clip" id="cpu-pump"><span class="run">—</span></dd></div>
-            <div class="row"><dt title="Raw CPU utilisation; the dial shows whichever limit is closest">Utilisation</dt><dd class="clip" id="cpu-loadavg"><span class="run">—</span></dd></div>
+            <div class="row"><dt title="1, 5 and 15 minute load average">Load avg</dt><dd class="clip" id="cpu-loadavg"><span class="run">—</span></dd></div>
             <div class="row"><dt>Busiest thread</dt><dd class="clip" id="cpu-busiest"><span class="run">—</span></dd></div>
             <div class="spark-wrap">
               <div class="cap"><span>Load, last 60 s</span><span id="cpu-peak">peak —</span></div>
@@ -1567,8 +1567,8 @@ function ingest(d) {
   sampleAt = performance.now(); sampleMs = (d.interval || .5) * 1000;
   const c = d.cpu;
   if (c) {
-    const u = (c.limit?.value ?? c.util ?? 0) / 100;      // the dial: the closest of power, thermal and load
-    S.cpu.lim = { term: c.limit?.term, throttled: !!c.limit?.throttled };
+    const u = (c.util ?? 0) / 100;      // the dial: plain CPU utilisation (the GPU dial shows its closest limit)
+    S.cpu.lim = { term: 'LOAD', throttled: !!c.limit?.throttled };
     const liq = c.temp_source === 'coolant' && typeof c.coolant_temp === 'number';   // missing keys = old backend
     const sc = liq ? SC_LIQ : SC_DIE, tc = liq ? c.coolant_temp : c.temp;
     if (sc !== S.cpu.sc) { S.cpu.sc = sc; S.cpu.temp.x = S.cpu.temp.t = tc == null ? 0 : tempNorm(tc, sc); S.cpu.temp.v = 0; }   // snap on source change
@@ -1630,7 +1630,7 @@ function render() {
     put('cpu-sub', c.cores ? `${c.cores} cores · ${c.threads} threads` : `${c.threads} threads`);
     put('cpu-clock', c.freq_mhz ? unit(c.freq_mhz / 1000, 'GHz', 2) : '—', true);
     put('cpu-power', c.power_w == null ? '—' : `${fmt(c.power_w, 1)}<small>${c.limit?.power_limit_w ? `/ ${fmt(c.limit.power_limit_w, 0)} W` : 'W'}</small>`, true);
-    put('cpu-loadavg', unit(c.util, '%', 0), true);
+    put('cpu-loadavg', c.load ? c.load.map(x => x.toFixed(1)).join(' ') : '—');
     renderCooling(d.fan);
     const pc = c.per_core || [];
     if (pc.length) {

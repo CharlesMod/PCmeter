@@ -108,13 +108,13 @@ Item {
             pumpValue = pumpOn && !pumpStalled ? F.thou(pump.rpm) : "—"
             histT = host.trange <= 120 ? (d.t || 0) : (d.hist_t || 0)
             var lm = c.limit || {}
-            limitTerm = lm.term || "LOAD"; throttled = !!lm.throttled
+            limitTerm = "LOAD"; throttled = !!lm.throttled      // the CPU dial is plain utilisation; only THROTTLED rides along
             loadT = u; tempC = tc; tempT = tnorm(tc); geiger.u = ur
             nameText = c.name || "—"
             subText = c.cores ? c.cores + " cores · " + c.threads + " threads" : c.threads + " threads"
             r.a = [c.freq_mhz ? F.fmt(c.freq_mhz / 1000, 2) : "—", c.freq_mhz ? "GHz" : ""]
             r.b = [F.fmt(c.power_w, 1), c.power_w === null || c.power_w === undefined ? "" : lm.power_limit_w ? "/ " + F.fmt(lm.power_limit_w, 0) + " W" : "W"]
-            r.c = [F.fmt(c.util), "%"]                                    // raw utilisation; the dial shows the closest limit
+            r.c = [c.load ? c.load.map(function (x) { return x.toFixed(1) }).join(" ") : "—", ""]
             var pc = c.per_core || []
             if (pc.length) {
                 var bi = 0, hi = 0, k
@@ -330,7 +330,7 @@ Item {
                         value: root.pumpStalled ? "PUMP STALL" : root.pumpValue; unit: root.pumpStalled ? "" : (root.pumpValue === "—" ? "" : "rpm")
                         bold: root.pumpStalled; valueColor: root.pumpStalled ? Skins.qt(root.sk.hot) : undefined
                     }
-                    ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Utilisation" : "Fan"; value: root.rows.c ? root.rows.c[0] : "—"; unit: root.rows.c ? root.rows.c[1] : "" }
+                    ReadRow { width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Load avg" : "Fan"; value: root.rows.c ? root.rows.c[0] : "—"; unit: root.rows.c ? root.rows.c[1] : "" }
                     ReadRow {
                         width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Busiest thread" : "VRAM"
                         meter: !root.isCpu; frac: root.vramFrac; glide: root.burst
