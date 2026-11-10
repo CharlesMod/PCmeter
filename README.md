@@ -30,7 +30,8 @@ The shortcut runs `pcmeter --app`, which shows the CPU and GPU cards as desktop 
 its own frameless, translucent window with the desktop blurred behind it, and there is no outer
 window. Drag a card anywhere to move it, drag its left or right edge to change its width, and hover
 it for its menu and dismiss buttons. The menu (also in the system tray) picks the skin, the view
-(Full, Compact, or Gauges only), clicks, keep-on-top, and which cards are shown. Launching PCmeter
+(Full, Compact, or Gauges only), clicks, keep-on-top, which cards are shown, and **Run at startup** (starts PCmeter when you log in,
+through `~/.config/autostart`). Launching PCmeter
 again brings back any card you dismissed. On KDE Plasma (Wayland) the cards return to where you left
 them. NVIDIA cards need the proprietary driver; AMD cards work out of the box.
 
