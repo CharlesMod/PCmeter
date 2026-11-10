@@ -34,6 +34,8 @@ Item {
     property string peakText: "peak —"
     property var rows: ({})                  // label -> [value, unit]
     property real vramFrac: 0
+    property string eLabel: "Memory load"    // GPU's fifth row: Thermal headroom (NVIDIA) or Memory load
+    property bool bwOn: false                // the GPU reports VRAM throughput
     property var cores: []                   // per-thread load, 0..1; the bars glide to it
     property var peaks: []
     property string limitTerm: "LOAD"
@@ -156,6 +158,15 @@ Item {
                 r.d = [F.fmt(g.vram_used_mb / 1024, 1), "/ " + F.fmt(g.vram_total_mb / 1024, 1) + " GB"]
                 vramFrac = g.vram_used_mb / g.vram_total_mb
             }
+            // Fifth row: degrees left before the driver's slowdown temperature (NVIDIA), else memory-controller load.
+            if (typeof gl.temp_limit === "number" && typeof g.temp === "number") {
+                eLabel = "Thermal headroom"
+                r.e = [F.fmt(gl.temp_limit - g.temp), "°C"]
+            } else {
+                eLabel = "Memory load"
+                r.e = [F.fmt(g.mem_util), g.mem_util === null || g.mem_util === undefined ? "" : "%"]
+            }
+            bwOn = g.bw_gbps !== null && g.bw_gbps !== undefined
             F.push(hist, g.util || 0, 120)
             peakText = "peak " + Math.round(Math.max.apply(null, hist)) + "%"
             F.push(bwHist, g.bw_gbps !== null && g.bw_gbps !== undefined ? g.bw_gbps : (g.mem_util || 0), 120)
@@ -335,6 +346,16 @@ Item {
                         width: parent.width; sk: root.sk; acc: root.acc; label: root.isCpu ? "Busiest thread" : "VRAM"
                         meter: !root.isCpu; frac: root.vramFrac; glide: root.burst
                         value: root.rows.d ? root.rows.d[0] : "—"; unit: root.rows.d ? root.rows.d[1] : ""
+                    }
+                    // GPU: compact keeps the throughput as a row (full has its own section), plus one more reading
+                    ReadRow {
+                        visible: !root.isCpu && root.compact && root.bwOn; width: parent.width; sk: root.sk; acc: root.acc
+                        label: "VRAM throughput"; meter: true; frac: root.bwFrac; glide: root.burst
+                        value: root.bwValue; unit: root.bwUnit
+                    }
+                    ReadRow {
+                        visible: !root.isCpu; width: parent.width; sk: root.sk; acc: root.acc; label: root.eLabel
+                        value: root.rows.e ? root.rows.e[0] : "—"; unit: root.rows.e ? root.rows.e[1] : ""
                     }
                     Item {
                         width: parent.width; height: 8 + 14 + 4 + 38

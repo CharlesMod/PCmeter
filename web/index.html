@@ -783,6 +783,8 @@ body.gauge .rs { display: none; }
             <div class="row"><dt>Board power</dt><dd class="clip" id="gpu-power"><span class="run">—</span></dd></div>
             <div class="row"><dt>Fan</dt><dd class="clip" id="gpu-fan"><span class="run">—</span></dd></div>
             <div class="row" style="display:block"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><dt>VRAM</dt><dd class="clip" id="gpu-vram"><span class="run">—</span></dd></div><div class="meter thin"><i id="gpu-vram-bar"></i></div></div>
+            <div class="row" id="gpu-bwrow-row" style="display:none"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><dt>VRAM throughput</dt><dd class="clip" id="gpu-bwrow"><span class="run">—</span></dd></div><div class="meter thin"><i id="gpu-bwrow-bar"></i></div></div>
+            <div class="row"><dt id="gpu-e-label">Memory load</dt><dd class="clip" id="gpu-e"><span class="run">—</span></dd></div>
             <div class="spark-wrap">
               <div class="cap"><span>Load, last 60 s</span><span id="gpu-peak">peak —</span></div>
               <canvas class="spark" id="gpu-spark"></canvas>
@@ -1661,6 +1663,23 @@ function render() {
   if (g.vram_total_mb) {
     put('gpu-vram', `${fmt(g.vram_used_mb / 1024, 1)}<small>/ ${fmt(g.vram_total_mb / 1024, 1)} GB</small>`, true);
     putWidth('gpu-vram-bar', g.vram_used_mb / g.vram_total_mb);
+  }
+  // Compact keeps the throughput as a row (full has its own section), plus one more reading: degrees left before
+  // the driver's slowdown temperature (NVIDIA), else memory-controller load. As in the desktop card.
+  const bwRow = compact && g.bw_gbps != null;
+  $('gpu-bwrow-row').style.display = bwRow ? 'block' : 'none';
+  if (bwRow) {
+    const r = rate(g.bw_gbps);
+    put('gpu-bwrow', `${r.v}<small>${r.u}</small>`, true);
+    putWidth('gpu-bwrow-bar', g.bw_gbps / (S.gpu.bwMax || 1));
+  }
+  const tl = g.limit?.temp_limit;
+  if (typeof tl === 'number' && typeof g.temp === 'number') {
+    put('gpu-e-label', 'Thermal headroom');
+    put('gpu-e', unit(tl - g.temp, '°C'), true);
+  } else {
+    put('gpu-e-label', 'Memory load');
+    put('gpu-e', unit(g.mem_util, '%'), true);
   }
   put('gpu-peak', `peak ${Math.round(Math.max(...S.gpu.hist))}%`);
   if (compact) return;

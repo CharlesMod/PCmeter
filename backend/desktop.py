@@ -45,6 +45,7 @@ VIEWS = (("full", "Full"), ("compact", "Compact"), ("gauge", "Gauges only"))
 DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH = 440, 340, 900
 MIN_ZOOM, MAX_ZOOM = 0.5, 3.0
 MIN_PX, MAX_PX = 240, 1320      # window width limits (the card scales, so these are zoom 0.55 and 3.0)
+SNAP_PX, SNAP_FRACTION = 32, 0.08   # an edge drag released this close to the default width snaps to it
 # The cards are drawn by Qt Quick. "gpu" (default) uses its hardware renderer (RHI: OpenGL or Vulkan): on
 # a real desktop it idles near 0.3% of a core. "cpu" (PCMETER_RENDER=cpu) is the software renderer, for
 # hosts with no usable GL (about 15% of a core when drawing a 4K card).
@@ -399,7 +400,12 @@ class Gadget(QObject):
             return                          # KWin owns the geometry until release
         if not self.user:
             target = max(120, self.work_height() // len(CARDS))
-            zoom = max(MIN_ZOOM, min(MAX_ZOOM, target / height))
+            if fixed:
+                zoom = max(MIN_ZOOM, min(MAX_ZOOM, target / height))
+            else:
+                # the cards share one zoom, so they are one width; the card with the tallest content fills
+                # its half of the area and the others get the spare height below their content
+                zoom = self.ctl.default_zoom()
             win_h = target
             win_w = round(layout_w * zoom)
         else:
@@ -431,6 +437,8 @@ class Gadget(QObject):
         if self.wanted and not self.isVisible():
             self._reveal()
         self.update_blur()
+        if not fixed:
+            self.ctl.share_default_zoom(self)
 
     fixed_was = False
 
@@ -454,10 +462,30 @@ class Gadget(QObject):
         # would be overwritten by it, so give it a moment.
         QTimer.singleShot(300, self._after_drag)
 
+    def default_width(self):
+        """Window width of the cards at their default size, half the work area high (see content_size)."""
+        return round(DEFAULT_WIDTH * self.ctl.default_zoom())
+
+    def own_default_zoom(self):
+        """The zoom at which this card's content is exactly half its work area high."""
+        target = max(120, self.work_height() // len(CARDS))
+        return max(MIN_ZOOM, min(MAX_ZOOM, target / max(80, self.last[1])))
+
     def _after_drag(self):
         if self.last and not self.fixed_width and not self.dragging:
-            self.zoom = max(MIN_ZOOM, min(MAX_ZOOM, self.width() / DEFAULT_WIDTH))
-            self.bridge.zoomChanged.emit()
+            # Snap: a width released near the default size returns the card to it, exactly half the work
+            # area high, so stacked cards line up. KWin owns the drag, so the snap happens on release.
+            default_w = self.default_width()
+            if abs(self.width() - default_w) <= max(SNAP_PX, round(default_w * SNAP_FRACTION)):
+                self.user = False
+                self.ctl.store.setValue(f"{self.key}/usersize", False)
+                self.ctl.store.remove(f"{self.key}/width")
+                self.ctl.store.remove(f"{self.key}/zoom")
+                if DEBUG:
+                    print(f"[{self.key}] snapped {self.width()} -> default {default_w}", file=sys.stderr, flush=True)
+            else:
+                self.zoom = max(MIN_ZOOM, min(MAX_ZOOM, self.width() / DEFAULT_WIDTH))
+                self.bridge.zoomChanged.emit()
             self.content_size(*self.last)
             self._save_geometry()
 
@@ -536,6 +564,18 @@ class Service(QObject):
         for key, label in CARDS:
             if caption(label) == window_caption and not on:
                 self.ctl.gadgets[key].end_drag()
+
+    @Slot(str, result=int)
+    def snapWidth(self, window_caption):
+        """KWin, as an edge drag starts: the width this card's deadband holds (its default width), 0 for none."""
+        for key, label in CARDS:
+            gadget = self.ctl.gadgets.get(key)
+            if caption(label) == window_caption and gadget and gadget.last and not gadget.fixed_width:
+                width = gadget.default_width()
+                if DEBUG:
+                    print(f"[{key}] deadband target {width}", file=sys.stderr, flush=True)
+                return width
+        return 0
 
     @Slot(str, int, int, int, int)
     def frame(self, window_caption, left, top, right, bottom):
@@ -734,12 +774,26 @@ class Controller(QObject):
             if isinstance(pos, (list, tuple)) and len(pos) == 2:
                 saved[caption(label)] = (int(pos[0]), int(pos[1]))
         order = [caption(label) for _, label in reversed(CARDS)]   # right to left: GPU, then CPU
-        self.placer.load(order, saved, self.above, DEBUG)
+        self.placer.load(order, saved, self.above, DEBUG, (SNAP_PX, SNAP_FRACTION))
 
     def window_moved(self, window_caption, x, y):
         for key, label in CARDS:
             if caption(label) == window_caption:
                 self.store.setValue(f"{key}/wlpos", [x, y])
+
+    def default_zoom(self):
+        """The zoom the full-width cards share at their default size: the largest at which every card's content
+        fits in half its work area, so the cards are one width and each exactly half the area high."""
+        zooms = [g.own_default_zoom() for g in getattr(self, "gadgets", {}).values() if g.last and not g.fixed_width]
+        return min(zooms) if zooms else 1.0
+
+    def share_default_zoom(self, source):
+        """A card's content changed size: the other default-sized cards follow the shared width."""
+        zoom = self.default_zoom()
+        for g in self.gadgets.values():
+            if g is not source and not g.user and g.last and not g.fixed_width and not g.dragging \
+                    and abs(g.zoom - zoom) > 1e-4:
+                g.content_size(*g.last)
 
     def work_area(self, screen):
         """The screen minus panels. Qt knows it on X11; on Wayland KWin's script reports it."""
