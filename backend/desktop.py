@@ -4,7 +4,7 @@ There is no outer window. Each card is its own Qt Quick window (qml/Card.qml), e
 the card, and the desktop shows through it. Drag a card anywhere to move it, drag its left or right
 edge to change its width (the height follows the content), and use its buttons to dismiss it or open
 the menu. The menu (also in the system tray) picks the skin, the view (full, compact, gauges), clicks,
-keep-on-top, run at startup, and which cards are shown.
+keep-on-top, launch on startup, and which cards are shown.
 
 The cards cost nothing while nothing moves: the scene graph renders only when an animation runs, and
 sampling stops entirely (the sampler waits on an event) while every card is hidden or minimised or
@@ -35,6 +35,7 @@ from shiboken6 import getCppPointer, wrapInstance
 
 import kwin
 import wlblur
+from autostart import enabled as autostart_enabled, set_enabled as set_autostart
 
 APP_ID = "pcmeter"
 SERVICE, OBJECT_PATH, IFACE = "org.pcmeter.PCmeter", "/PCmeter", "org.pcmeter.PCmeter"
@@ -88,34 +89,6 @@ def rounded_rects(w, h, r):
 
 def is_true(v):
     return v in ("true", True)
-
-
-# ---- run at startup: an XDG autostart entry, which KDE Plasma, GNOME and the rest all read at login
-def autostart_file():
-    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "autostart" / "pcmeter.desktop"
-
-
-def launch_command():
-    """How to start this PCmeter: the installed link if there is one (it survives updates), else this binary."""
-    link = Path.home() / ".local/bin/pcmeter"
-    if getattr(sys, "frozen", False):
-        return str(link) if link.exists() else sys.executable
-    return f"{sys.executable} {Path(__file__).resolve().parent / 'pcmeter.py'}"
-
-
-def autostart_enabled():
-    return autostart_file().is_file()
-
-
-def set_autostart(on):
-    f = autostart_file()
-    if not on:
-        f.unlink(missing_ok=True)
-        return
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text("[Desktop Entry]\nType=Application\nName=PCmeter\nComment=CPU and GPU desktop gadgets\n"
-                 f"Exec={launch_command()} --app\nIcon=pcmeter\nTerminal=false\nStartupNotify=false\n"
-                 "X-GNOME-Autostart-enabled=true\n")
 
 
 def _unwrap(value):
@@ -890,7 +863,7 @@ class Controller(QObject):
         self.sound_action.toggled.connect(lambda on: self._set("sound", on))
         self.above_action = QAction("Keep on top", self, checkable=True, checked=self.above)
         self.above_action.toggled.connect(self._set_above)
-        self.autostart_action = QAction("Run at startup", self, checkable=True, checked=autostart_enabled())
+        self.autostart_action = QAction("Launch on startup", self, checkable=True, checked=autostart_enabled())
         self.autostart_action.toggled.connect(self._set_autostart)
         self.quit_action = QAction("Quit PCmeter", self)
         self.quit_action.triggered.connect(self.quit)
@@ -926,7 +899,7 @@ class Controller(QObject):
         try:
             set_autostart(on)
         except OSError as e:
-            print(f"pcmeter: run at startup: {e}", file=sys.stderr, flush=True)
+            print(f"pcmeter: launch on startup: {e}", file=sys.stderr, flush=True)
         self._sync_autostart()
 
     def popup_menu(self, gadget, point):

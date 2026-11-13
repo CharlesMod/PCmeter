@@ -33,12 +33,14 @@ from pathlib import Path
 
 import psutil
 
+import autostart
+
 try:
     import pynvml
 except ImportError:
     pynvml = None
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 # A PyInstaller build unpacks the web UI next to the code in sys._MEIPASS.
 WEB_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "web"
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -1198,13 +1200,49 @@ def make_handler(telemetry):
         def log_message(self, *args):
             pass
 
-        def _send(self, body, ctype):
-            self.send_response(200)
+        def _send(self, body, ctype, shared=True, status=200):
+            self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            if shared:   # the read-only telemetry may be read from another origin (a custom page)
+                self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
+
+        def _autostart_state(self, status=200):
+            state = {"supported": autostart.supported(), "enabled": autostart.enabled()}
+            self._send(json.dumps(state).encode(), "application/json", shared=False, status=status)
+
+        def _same_origin(self):
+            """Only PCmeter's own page may change settings: no Origin (a tool like curl), or this server's."""
+            origin = self.headers.get("Origin")
+            return origin is None or origin == f"http://{self.headers.get('Host', '')}"
+
+        def do_POST(self):
+            path = self.path.split("?", 1)[0]
+            if path != "/autostart":
+                self.send_error(404)
+                return
+            # A JSON body forces a CORS preflight, which this server never grants, and the Origin check
+            # covers the rest: other websites cannot switch launch-on-startup on.
+            if not self._same_origin() or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                self.send_error(403)
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                on = json.loads(self.rfile.read(min(length, 1024)) or b"{}").get("enabled")
+                if not isinstance(on, bool):
+                    raise ValueError
+            except ValueError:
+                self.send_error(400, 'send {"enabled": true} or {"enabled": false}')
+                return
+            try:
+                autostart.set_enabled(on)
+            except OSError as exc:
+                print(f"pcmeter: launch on startup: {exc}", file=sys.stderr, flush=True)
+                self._autostart_state(status=500)
+                return
+            self._autostart_state()
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
@@ -1221,6 +1259,8 @@ def make_handler(telemetry):
                 finally:
                     telemetry.attach(-1)
                 self._send(data.encode(), "application/json")
+            elif path == "/autostart":
+                self._autostart_state()
             elif path == "/history":
                 self._send(json.dumps(telemetry.history.payload()).encode(), "application/json")
             elif path in ("/", "/index.html"):

@@ -30,9 +30,11 @@ The shortcut runs `pcmeter --app`, which shows the CPU and GPU cards as desktop 
 its own frameless, translucent window with the desktop blurred behind it, and there is no outer
 window. Drag a card anywhere to move it, drag its left or right edge to change its width, and hover
 it for its menu and dismiss buttons. The menu (also in the system tray) picks the skin, the view
-(Full, Compact, or Gauges only), clicks, keep-on-top, which cards are shown, and **Run at startup** (starts PCmeter when you log in,
-through `~/.config/autostart`). Launching PCmeter
-again brings back any card you dismissed. On KDE Plasma (Wayland) the cards return to where you left
+(Full, Compact, or Gauges only), clicks, keep-on-top, which cards are shown, and **Launch on startup**
+(starts PCmeter when you log in). In the browser window (`--app --browser`, and on Windows and macOS)
+right-click anywhere for the same checkbox. It is per user and needs no admin rights: an entry in
+`~/.config/autostart` on Linux, the `Run` key under `HKEY_CURRENT_USER` on Windows, and a LaunchAgent
+in `~/Library/LaunchAgents` on macOS. Launching PCmeter again brings back any card you dismissed. On KDE Plasma (Wayland) the cards return to where you left
 them. NVIDIA cards need the proprietary driver; AMD cards work out of the box.
 
 The gadgets are native Qt Quick (`qml/`, no browser engine). They draw with Qt's hardware renderer (OpenGL ES), at up to 24

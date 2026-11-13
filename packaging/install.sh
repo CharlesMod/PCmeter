@@ -14,7 +14,7 @@ desktop=$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")
 if [ "$1" = "--uninstall" ]; then
   rm -rf "$lib"
   rm -f "$bin/pcmeter" "$apps/pcmeter.desktop" "$icons/pcmeter.svg" "$desktop/pcmeter.desktop"
-  rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/pcmeter.desktop"     # "Run at startup", if it was on
+  rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/pcmeter.desktop"     # "Launch on startup", if it was on
   command -v update-desktop-database >/dev/null && update-desktop-database "$apps" 2>/dev/null || true
   echo "PCmeter removed."
   exit 0
