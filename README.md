@@ -1,5 +1,8 @@
 # PCmeter
 
+<img width="874" height="555" alt="image" src="https://github.com/user-attachments/assets/083239fb-8f90-444f-8c73-1c50cfc6dc6a" />
+
+
 A CPU and GPU monitor with gadget-style instruments. Each card has a dual dial
 (load plus an inset temperature sub-dial, after the Vista CPU meter gadget), a
 Geiger-counter activity strip with a flashing LED, and the detail beneath it.
