@@ -1,0 +1,42 @@
+# One-time cleanup after rewriting history to the noreply address: removes the releases, tags and
+# run records that still reference the old commits, then publishes the current version again.
+# Runs once, when this file is pushed; it is deleted in the next commit.
+name: Scrub old history
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/scrub.yml]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  scrub:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Delete releases and their tags
+        run: |
+          for tag in $(gh release list -R "$REPO" --limit 100 --json tagName --jq '.[].tagName'); do
+            gh release delete "$tag" -R "$REPO" --yes --cleanup-tag
+          done
+          for ref in $(gh api "repos/$REPO/git/matching-refs/tags" --jq '.[].ref'); do
+            gh api -X DELETE "repos/$REPO/git/$ref"
+          done
+
+      - name: Delete earlier workflow runs
+        run: |
+          gh api --paginate "repos/$REPO/actions/runs?per_page=100" \
+            --jq '.workflow_runs[] | select(.id != ${{ github.run_id }}) | .id' |
+          while read -r id; do gh api -X DELETE "repos/$REPO/actions/runs/$id" || echo "kept run $id"; done
+
+      - name: Publish the current version again
+        run: gh workflow run release.yml -R "$REPO" --ref main
